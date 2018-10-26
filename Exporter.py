@@ -46,10 +46,10 @@ for i in range(len(cameras)):
             cameraPath.append([x_pos, y_pos, z_pos])
     else: # for not animated Cameras
         cameraPath.append([cameraObject.location.x, cameraObject.location.y, cameraObject.location.z])
-        viewDirection = cameraObject.matrix_world.to_quaternion() * Vector((0.0, -1.0, 0.0))
-        viewDirectionPath.append([viewDirection.x, viewDirection.y, viewDirection.z])
-        up = cameraObject.matrix_world.to_quaternion() * Vector((0.0, 0.0, 1.0))
-        upPath.append([up.x, up.y, up.z])
+        viewDirection = cameraObject.matrix_world.to_quaternion() * Vector((0.0, .0, -1.0))
+        viewDirectionPath.append([viewDirection.x, viewDirection.z, viewDirection.y])
+        up = cameraObject.matrix_world.to_quaternion() * Vector((0.0, 1.0, 0.0))
+        upPath.append([up.x, up.z, up.y])
     dataDictionary['cameras'][camera.name] = collections.OrderedDict()
     dataDictionary['cameras'][camera.name]['type'] = cameraType
     dataDictionary['cameras'][camera.name]['path'] = cameraPath
@@ -73,8 +73,8 @@ for i in range(len(lamps)):
         lightType = "directional"
         dataDictionary['lights'][lamp.name] = collections.OrderedDict()
         dataDictionary['lights'][lamp.name]['type'] = lightType
-        viewDirection = lampObject.matrix_world.to_quaternion() * Vector((0.0, -1.0, 0.0))
-        dataDictionary['lights'][lamp.name]['direction'] = [viewDirection.x, viewDirection.y, viewDirection.z]
+        viewDirection = lampObject.matrix_world.to_quaternion() * Vector((0.0, 0.0, -1.0))
+        dataDictionary['lights'][lamp.name]['direction'] = [viewDirection.x, viewDirection.z, viewDirection.y]
         dataDictionary['lights'][lamp.name]['irradiance'] = "PlaceHolder" # TODO
         dataDictionary['lights'][lamp.name]['scale'] = "PlaceHolder"  # TODO
     elif lamp.type == "SPOT":
