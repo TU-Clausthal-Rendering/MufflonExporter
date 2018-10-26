@@ -32,16 +32,17 @@ for i in range(len(cameras)):
             dataDictionary['cameras'][camera.name] = collections.OrderedDict()
             dataDictionary['cameras'][camera.name]['type'] = cameraType
             fov = camera.angle * 180 / 3.141592653589793  # convert rad to degree
+            dataDictionary['cameras'][camera.name]['fov'] = fov
         else:
             cameraType = "focus"
             dataDictionary['cameras'][camera.name] = collections.OrderedDict()
             dataDictionary['cameras'][camera.name]['type'] = cameraType
-            focalLength = camera.length
+            focalLength = camera.lens
             dataDictionary['cameras'][camera.name]['focalLength'] = focalLength
-            focalDistance = camera.dof_distance
-            dataDictionary['cameras'][camera.name]['focalDistance'] = focalDistance
             chipHeight = camera.sensor_height
             dataDictionary['cameras'][camera.name]['chipHeight'] = chipHeight
+            focusDistance = camera.dof_distance
+            dataDictionary['cameras'][camera.name]['focusDistance'] = focusDistance
             dataDictionary['cameras'][camera.name]['aperture'] = aperture
     elif camera.type == "ORTHO":
         cameraType = "ortho"
