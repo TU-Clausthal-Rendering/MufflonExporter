@@ -37,12 +37,9 @@ for i in range(len(cameras)):
             cameraType = "focus"
             dataDictionary['cameras'][camera.name] = collections.OrderedDict()
             dataDictionary['cameras'][camera.name]['type'] = cameraType
-            focalLength = camera.lens
-            dataDictionary['cameras'][camera.name]['focalLength'] = focalLength
-            chipHeight = camera.sensor_height
-            dataDictionary['cameras'][camera.name]['chipHeight'] = chipHeight
-            focusDistance = camera.dof_distance
-            dataDictionary['cameras'][camera.name]['focusDistance'] = focusDistance
+            dataDictionary['cameras'][camera.name]['focalLength'] = camera.lens
+            dataDictionary['cameras'][camera.name]['chipHeight'] = camera.sensor_height
+            dataDictionary['cameras'][camera.name]['focusDistance'] = camera.dof_distance
             dataDictionary['cameras'][camera.name]['aperture'] = aperture
     elif camera.type == "ORTHO":
         cameraType = "ortho"
@@ -58,7 +55,7 @@ for i in range(len(cameras)):
     cameraPath = []
     viewDirectionPath = []
     upPath = []
-    if camera.animation_data: # TODO Check if this works
+    if camera.animation_data:  # TODO Check if this works
         x_curve = camera.animation_data.action.fcurves.find('location', index=0)
         y_curve = camera.animation_data.action.fcurves.find('location', index=1)
         z_curve = camera.animation_data.action.fcurves.find('location', index=2)
@@ -69,7 +66,7 @@ for i in range(len(cameras)):
             cameraPath.append([x_pos, z_pos , y_pos])
     else:  # for not animated Cameras
         cameraPath.append([cameraObject.location.x, cameraObject.location.z, cameraObject.location.y])
-        viewDirection = cameraObject.matrix_world.to_quaternion() * Vector((0.0, .0, -1.0))
+        viewDirection = cameraObject.matrix_world.to_quaternion() * Vector((0.0, 0.0, -1.0))
         viewDirectionPath.append([viewDirection.x, viewDirection.z, viewDirection.y])
         up = cameraObject.matrix_world.to_quaternion() * Vector((0.0, 1.0, 0.0))
         upPath.append([up.x, up.z, up.y])
@@ -88,6 +85,7 @@ for i in range(len(lamps)):
         lightType = "point"
         dataDictionary['lights'][lamp.name] = collections.OrderedDict()
         dataDictionary['lights'][lamp.name]['type'] = lightType
+        dataDictionary['lights'][lamp.name]['position'] = [lampObject.location.x, lampObject.location.z, lampObject.location.y]
         dataDictionary['lights'][lamp.name]['intensity'] = [lamp.color.r, lamp.color.g, lamp.color.b]
         dataDictionary['lights'][lamp.name]['scale'] = lamp.energy
     elif lamp.type == "SUN":
@@ -96,22 +94,23 @@ for i in range(len(lamps)):
         dataDictionary['lights'][lamp.name]['type'] = lightType
         viewDirection = lampObject.matrix_world.to_quaternion() * Vector((0.0, 0.0, -1.0))
         dataDictionary['lights'][lamp.name]['direction'] = [viewDirection.x, viewDirection.z, viewDirection.y]
-        dataDictionary['lights'][lamp.name]['irradiance'] = "PlaceHolder"  # TODO
+        dataDictionary['lights'][lamp.name]['radiance'] = "PlaceHolder"  # TODO
         dataDictionary['lights'][lamp.name]['scale'] = "PlaceHolder"  # TODO
     elif lamp.type == "SPOT":
         lightType = "spot"
         dataDictionary['lights'][lamp.name] = collections.OrderedDict()
         dataDictionary['lights'][lamp.name]['type'] = lightType
+        dataDictionary['lights'][lamp.name]['position'] = [lampObject.location.x, lampObject.location.z, lampObject.location.y]
+        lightDirection = lampObject.matrix_world.to_quaternion() * Vector((0.0, 0.0, -1.0))
+        dataDictionary['lights'][lamp.name]['direction'] = [lightDirection.x, lightDirection.z, lightDirection.y]
         dataDictionary['lights'][lamp.name]['intensity'] = [lamp.color.r, lamp.color.g, lamp.color.b]
         dataDictionary['lights'][lamp.name]['scale'] = lamp.energy
         dataDictionary['lights'][lamp.name]['exponent'] = 4.0
-        dataDictionary['lights'][lamp.name]['width'] = lamp.spot_size
-        dataDictionary['lights'][lamp.name]['falloffStart'] = lamp.spot_size
-        # TODO Parameters
+        dataDictionary['lights'][lamp.name]['width'] = lamp.spot_size / 2
+        dataDictionary['lights'][lamp.name]['falloffStart'] = lamp.spot_size / 2
     else:
         print("Skipping unsupported lamp type: \"%s\" from: \"%s\"" % lamp.type, lamp.name)
         continue
-    # TODO Other parameters (pos)
     # TODO envmap, goniometric
 
 # Materials
