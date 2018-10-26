@@ -94,8 +94,8 @@ for i in range(len(lamps)):
         dataDictionary['lights'][lamp.name]['type'] = lightType
         viewDirection = lampObject.matrix_world.to_quaternion() * Vector((0.0, 0.0, -1.0))
         dataDictionary['lights'][lamp.name]['direction'] = [viewDirection.x, viewDirection.z, viewDirection.y]
-        dataDictionary['lights'][lamp.name]['radiance'] = "PlaceHolder"  # TODO
-        dataDictionary['lights'][lamp.name]['scale'] = "PlaceHolder"  # TODO
+        dataDictionary['lights'][lamp.name]['radiance'] = [lamp.color.r, lamp.color.g, lamp.color.b]
+        dataDictionary['lights'][lamp.name]['scale'] = lamp.energy
     elif lamp.type == "SPOT":
         lightType = "spot"
         dataDictionary['lights'][lamp.name] = collections.OrderedDict()
@@ -115,7 +115,42 @@ for i in range(len(lamps)):
 
 # Materials
 
+materials = bpy.data.materials
+for i in range(len(materials)):
+    material = materials[i]
+    materialType = ""
+    print(material.diffuse_shader)
+    if material.diffuse_shader == "LAMBERT":
+        materialType = "lambert"
+        dataDictionary['materials'][material.name] = collections.OrderedDict()
+        dataDictionary['materials'][material.name]['type'] = materialType
+        dataDictionary['materials'][material.name]['albedo'] = ([material.diffuse_color.r, material.diffuse_color.g, material.diffuse_color.b])
+    elif material.diffuse_shader == "OREN_NAYAR":
+        materialType = "orennayar"
+        dataDictionary['materials'][material.name] = collections.OrderedDict()
+        dataDictionary['materials'][material.name]['type'] = materialType
+        dataDictionary['materials'][material.name]['albedo'] = ([material.diffuse_color.r, material.diffuse_color.g, material.diffuse_color.b])
+        dataDictionary['materials'][material.name]['roughness'] = material.roughness
+    elif material.diffuse_shader == "FRESNEL":
+        materialType = "fresnel"
+        dataDictionary['materials'][material.name] = collections.OrderedDict()
+        dataDictionary['materials'][material.name]['type'] = materialType
+        # TODO Finish Fresnel
+    elif material.specular_shader == "COOKTORR":  # TODO Multilayer Material when diffuse and specular shader matches (and emissive)
+        materialType = "torrance"
+        dataDictionary['materials'][material.name] = collections.OrderedDict()
+        dataDictionary['materials'][material.name]['type'] = materialType
+        dataDictionary['materials'][material.name]['albedo'] = ([material.specular_color.r, material.specular_color.g, material.specular_color.b])
+        dataDictionary['materials'][material.name]['roughness'] = material.specular_hardness / 511 # Max hardness = 511
+    else:  # TODO Other Materials (walter (roughness = 1-material.raytrace_transparency_gloss_factor ), emissive, blend)
+        print("Skipping unsupported material:\"%s\"" % material.name)
+
 # Scenarios
+
+dataDictionary['scenarios'][scn.name] = collections.OrderedDict()
+dataDictionary['scenarios'][scn.name]['camera'] = scn.camera
+dataDictionary['scenarios'][scn.name]['resolution'] = [scn.render.resolution_x, scn.render.resolution_y]
+# TODO Finish Scenarios
 
 print(json.dumps(dataDictionary, indent=4))
 
