@@ -24,7 +24,6 @@ cameras = bpy.data.cameras
 for i in range(len(cameras)):
     camera = cameras[i]
     cameraObject = bpy.data.objects[camera.name]
-    cameraType = ""
     if camera.type == "PERSP":
         aperture = camera.gpu_dof.fstop
         if aperture == 128.0:
@@ -80,7 +79,6 @@ lamps = bpy.data.lamps
 for i in range(len(lamps)):
     lamp = lamps[i]
     lampObject = bpy.data.objects[lamp.name]
-    lightType = ""
     if lamp.type == "POINT":
         lightType = "point"
         dataDictionary['lights'][lamp.name] = collections.OrderedDict()
@@ -118,37 +116,102 @@ for i in range(len(lamps)):
 materials = bpy.data.materials
 for i in range(len(materials)):
     material = materials[i]
-    materialType = ""
-    print(material.diffuse_shader)
-    if material.diffuse_shader == "LAMBERT":
-        materialType = "lambert"
+    # Check for Multi-Layer Material
+    layerCount = 0
+    workDictionary = {}
+    ignoreDiffuse = True
+    ignoreSpecular = True
+    if material.diffuse_shader == "LAMBERT" or material.diffuse_shader == "OREN_NAYAR" or material.diffuse_shader == "FRESNEL":
+        if material.diffuse_intensity != 0:  # ignore if factor == 0
+            layerCount += 1
+            ignoreDiffuse = False
+    if material.specular_shader == "COOKTORR":
+        if material.specular_intensity != 0:  # ignore if factor == 0
+            layerCount += 1
+            ignoreSpecular = False
+    if material.emit != 0:
+        layerCount += 1
+    if layerCount == 1:
+        dataDictionary['materials'][material.name] = collections.OrderedDict()
+        workDictionary = dataDictionary['materials'][material.name]
+    elif layerCount > 1:
+        layerCounter = layerCount
+        materialType = "blend"
         dataDictionary['materials'][material.name] = collections.OrderedDict()
         dataDictionary['materials'][material.name]['type'] = materialType
-        dataDictionary['materials'][material.name]['albedo'] = ([material.diffuse_color.r, material.diffuse_color.g, material.diffuse_color.b])
-    elif material.diffuse_shader == "OREN_NAYAR":
-        materialType = "orennayar"
-        dataDictionary['materials'][material.name] = collections.OrderedDict()
-        dataDictionary['materials'][material.name]['type'] = materialType
-        dataDictionary['materials'][material.name]['albedo'] = ([material.diffuse_color.r, material.diffuse_color.g, material.diffuse_color.b])
-        dataDictionary['materials'][material.name]['roughness'] = material.roughness
-    elif material.diffuse_shader == "FRESNEL":
-        materialType = "fresnel"
-        dataDictionary['materials'][material.name] = collections.OrderedDict()
-        dataDictionary['materials'][material.name]['type'] = materialType
-        # TODO Finish Fresnel
-    elif material.specular_shader == "COOKTORR":  # TODO Multilayer Material when diffuse and specular shader matches (and emissive)
-        materialType = "torrance"
-        dataDictionary['materials'][material.name] = collections.OrderedDict()
-        dataDictionary['materials'][material.name]['type'] = materialType
-        dataDictionary['materials'][material.name]['albedo'] = ([material.specular_color.r, material.specular_color.g, material.specular_color.b])
-        dataDictionary['materials'][material.name]['roughness'] = material.specular_hardness / 511 # Max hardness = 511
-    else:  # TODO Other Materials (walter (roughness = 1-material.raytrace_transparency_gloss_factor ), emissive, blend)
+        while layerCounter > 0: # create each layer dictionary
+            layerName = "layer%c" % chr(65 + (layerCount - layerCounter))
+            dataDictionary['materials'][material.name][layerName] = collections.OrderedDict()
+            layerCounter -= 1
+        workDictionary = dataDictionary['materials'][material.name]['layerA']
+    else:
         print("Skipping unsupported material:\"%s\"" % material.name)
+        continue
+    currentLayer = 0
+    addedLayer = False
+    if not ignoreDiffuse:
+        if material.diffuse_shader == "LAMBERT":
+            materialType = "lambert"
+            workDictionary['type'] = materialType
+            workDictionary['albedo'] = ([material.diffuse_color.r, material.diffuse_color.g, material.diffuse_color.b])
+            currentLayer += 1
+            addedLayer = True
+        elif material.diffuse_shader == "OREN_NAYAR":
+            materialType = "orennayar"
+            workDictionary['type'] = materialType
+            workDictionary['albedo'] = ([material.diffuse_color.r, material.diffuse_color.g, material.diffuse_color.b])
+            workDictionary['roughness'] = material.roughness
+            currentLayer += 1
+            addedLayer = True
+        elif material.diffuse_shader == "FRESNEL":
+            materialType = "fresnel"
+            workDictionary['type'] = materialType
+            # TODO Finish Fresnel
+            currentLayer += 1
+            addedLayer = True
+        if layerCount != 1:  # if blend Material
+            if addedLayer:
+                addedLayer = False
+                factorName = "factor%c" % chr(65 + (currentLayer-1))
+                dataDictionary['materials'][material.name][factorName] = material.diffuse_intensity
+            if currentLayer == layerCount:
+                continue
+            nextLayerName = "layer%c" % chr(65 + currentLayer)
+            workDictionary = dataDictionary['materials'][material.name][nextLayerName]
+    if not ignoreSpecular:
+        if material.specular_shader == "COOKTORR":
+            materialType = "torrance"
+            workDictionary['type'] = materialType
+            workDictionary['albedo'] = ([material.specular_color.r, material.specular_color.g, material.specular_color.b])
+            workDictionary['roughness'] = material.specular_hardness / 511 # Max hardness = 511
+            currentLayer += 1
+            addedLayer = True
+        if layerCount != 1:  # if blend Material
+            if addedLayer:
+                addedLayer = False
+                factorName = "factor%c" % chr(65 + (currentLayer-1))
+                dataDictionary['materials'][material.name][factorName] = material.specular_intensity
+            if currentLayer == layerCount:
+                continue
+            nextLayerName = "layer%c" % chr(65 + currentLayer)
+            workDictionary = dataDictionary['materials'][material.name][nextLayerName]
+            continue
+    if material.emit != 0:
+        materialType = "emissive"
+        workDictionary['type'] = materialType
+        workDictionary['radiance'] = ([material.diffuse_color.r, material.diffuse_color.g, material.diffuse_color.b])
+        workDictionary['scale'] = material.emit
+        currentLayer += 1
+        factorName = "factor%c" % chr(65 + (currentLayer - 1))
+        dataDictionary['materials'][material.name][factorName] = 1
+    if currentLayer != layerCount:
+        print("Error: Expected %d layers but %d were used at material: \"%s\"" % (layerCount,currentLayer ,material.name))
+    # TODO Other Materials (walter (roughness = 1-material.raytrace_transparency_gloss_factor ))
 
 # Scenarios
 
 dataDictionary['scenarios'][scn.name] = collections.OrderedDict()
-dataDictionary['scenarios'][scn.name]['camera'] = scn.camera
+dataDictionary['scenarios'][scn.name]['camera'] = scn.camera.name
 dataDictionary['scenarios'][scn.name]['resolution'] = [scn.render.resolution_x, scn.render.resolution_y]
 # TODO Finish Scenarios
 
