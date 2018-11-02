@@ -193,10 +193,10 @@ for i in range(len(materials)):
                 else:
                     factorName = "factorA"
                 workDictionary = dataDictionary['materials'][material.name]
-                i = 0
-                while materialDepth - i > 1:  # go to the root dictionary of the work dictionary
+                k = 0
+                while materialDepth - k > 1:  # go to the root dictionary of the work dictionary
                     workDictionary = workDictionary['layerB']
-                    i += 1
+                    k += 1
                 workDictionary[factorName] = material.diffuse_intensity
                 if layerCount - currentLayer != 0:  # if current layer was A set work dictionary to B
                     workDictionary = workDictionary['layerB']
@@ -217,10 +217,10 @@ for i in range(len(materials)):
                 else:
                     factorName = "factorA"
                 workDictionary = dataDictionary['materials'][material.name]
-                i = 0
-                while materialDepth - i > 1:  # go to the root dictionary of the work dictionary
+                k = 0
+                while materialDepth - k > 1:  # go to the root dictionary of the work dictionary
                     workDictionary = workDictionary['layerB']
-                    i += 1
+                    k += 1
                 workDictionary[factorName] = material.specular_intensity
                 if layerCount - currentLayer != 0:  # if current layer was A set work dictionary to B
                     workDictionary = workDictionary['layerB']
@@ -233,10 +233,94 @@ for i in range(len(materials)):
 dataDictionary['scenarios'][scn.name] = collections.OrderedDict()
 dataDictionary['scenarios'][scn.name]['camera'] = scn.camera.name
 dataDictionary['scenarios'][scn.name]['resolution'] = [scn.render.resolution_x, scn.render.resolution_y]
-# TODO Finish Scenarios
+lamps = bpy.data.lamps
+lights = []
+for i in range(len(lamps)):
+    lamp = lamps[i]
+    if lamp.type == "POINT" or lamp.type == "SUN" or lamp.type == "SPOT":
+        lights.append(lamp.name)
+dataDictionary['scenarios'][scn.name]['lights'] = lights
+dataDictionary['scenarios'][scn.name]['lod'] = 0
+# TODO Finish Scenarios (need binary for this)
 
 print(json.dumps(dataDictionary, indent=4))
 
 file = open(os.path.splitext(bpy.data.filepath)[0] + ".json", 'w')
 file.write(json.dumps(dataDictionary, indent=4))
 file.close()
+
+# Binary
+binary = bytearray()
+# Materials Header
+binary.extend("Mats".encode())
+materials = bpy.data.materials
+countOfMaterials = 0
+materialNames = []
+materialNameLengths = []
+bytePosition = 16
+for i in range(len(materials)):
+    material = materials[i]
+    if material.diffuse_shader == "LAMBERT" or material.diffuse_shader == "OREN_NAYAR" or material.diffuse_shader == "FRESNEL":
+        if material.diffuse_intensity != 0:  # ignore if factor == 0
+            layerCount += 1
+    if material.specular_shader == "COOKTORR":
+        if material.specular_intensity != 0:  # ignore if factor == 0
+            layerCount += 1
+    if material.emit != 0:
+        layerCount += 1
+    if layerCount == 0:
+        continue
+    countOfMaterials += 1
+    materialNames.append(material.name.encode())
+    materialNameLength = len(material.name.encode())
+    materialNameLengths.append(materialNameLength.to_bytes(4, byteorder='little'))
+    bytePosition += 4 + materialNameLength
+
+binary.extend(bytePosition.to_bytes(8, byteorder='little'))
+binary.extend(countOfMaterials.to_bytes(4, byteorder='little'))
+for i in range(len(materialNameLengths)):
+    binary.extend(materialNameLengths[i])
+    binary.extend(materialNames[i])
+
+# Objects Header
+
+binary.extend("Objs".encode())
+
+bytePosition += 4 + 8 # Type and next section start position
+
+countOfObjects = 0
+bytePosition += 4
+objects = bpy.data.objects
+
+for i in range(len(objects)):
+    if objects[i].type != "MESH":
+        continue
+    countOfObjects += 1
+    bytePosition += 8 # for the object start positions
+
+flags = 0
+bytePosition += 4
+
+objectStartPositions = []
+objectNames = []
+objectNameLengths = []
+for i in range(len(objects)):
+    if objects[i].type != "MESH":
+        continue
+    objectStartPositions.append(bytePosition)
+    bytePosition += 4 # for the Type check
+    objectNames.append(object.name.encode())
+    objectNameLength = len(object.name.encode())
+    objectNameLengths.append(objectNameLength.to_bytes(4, byteorder='little'))
+    bytePosition += 4 + objectNameLength
+    # TODO Finish Object
+
+binary.extend(bytePosition.to_bytes(8, byteorder='little'))
+binary.extend(countOfObjects.to_bytes(4, byteorder='little'))
+
+
+
+binFile = open(os.path.splitext(bpy.data.filepath)[0] + ".mff", 'bw')
+binFile.write(binary)
+binFile.close()
+
