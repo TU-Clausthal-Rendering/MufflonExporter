@@ -118,6 +118,7 @@ for i in range(len(materials)):
     material = materials[i]
     # Check for Multi-Layer Material
     layerCount = 0
+    materialDepth = 0
     workDictionary = {}
     ignoreDiffuse = True
     ignoreSpecular = True
@@ -135,20 +136,34 @@ for i in range(len(materials)):
         dataDictionary['materials'][material.name] = collections.OrderedDict()
         workDictionary = dataDictionary['materials'][material.name]
     elif layerCount > 1:
-        layerCounter = layerCount
+        materialDepth = 1
         materialType = "blend"
         dataDictionary['materials'][material.name] = collections.OrderedDict()
         dataDictionary['materials'][material.name]['type'] = materialType
-        while layerCounter > 0: # create each layer dictionary
-            layerName = "layer%c" % chr(65 + (layerCount - layerCounter))
-            dataDictionary['materials'][material.name][layerName] = collections.OrderedDict()
-            layerCounter -= 1
+        dataDictionary['materials'][material.name]['layerA'] = collections.OrderedDict()
+        dataDictionary['materials'][material.name]['layerB'] = collections.OrderedDict()
         workDictionary = dataDictionary['materials'][material.name]['layerA']
     else:
         print("Skipping unsupported material:\"%s\"" % material.name)
         continue
     currentLayer = 0
-    addedLayer = False
+    if material.emit != 0:
+        materialType = "emissive"
+        workDictionary['type'] = materialType
+        workDictionary['radiance'] = ([material.diffuse_color.r, material.diffuse_color.g, material.diffuse_color.b])
+        workDictionary['scale'] = material.emit
+        currentLayer += 1
+        if layerCount != 1:  # if blend Material
+            workDictionary = dataDictionary['materials'][material.name]
+            workDictionary['factorA'] = 1.0
+            workDictionary['factorB'] = 1.0  # for emissive both factors = 1
+            workDictionary = workDictionary['layerB']
+            if layerCount - currentLayer > 1:  # if we need an additional layer pair
+                materialDepth += 1
+                materialType = "blend"
+                workDictionary['layerA'] = collections.OrderedDict()
+                workDictionary['layerB'] = collections.OrderedDict()
+                workDictionary = workDictionary['layerA']
     if not ignoreDiffuse:
         if material.diffuse_shader == "LAMBERT":
             materialType = "lambert"
@@ -172,12 +187,19 @@ for i in range(len(materials)):
         if layerCount != 1:  # if blend Material
             if addedLayer:
                 addedLayer = False
-                factorName = "factor%c" % chr(65 + (currentLayer-1))
-                dataDictionary['materials'][material.name][factorName] = material.diffuse_intensity
-            if currentLayer == layerCount:
-                continue
-            nextLayerName = "layer%c" % chr(65 + currentLayer)
-            workDictionary = dataDictionary['materials'][material.name][nextLayerName]
+                factorName = ""
+                if layerCount - currentLayer == 0:  # check if current layer was A or B
+                    factorName = "factorB"
+                else:
+                    factorName = "factorA"
+                workDictionary = dataDictionary['materials'][material.name]
+                i = 0
+                while materialDepth - i > 1:  # go to the root dictionary of the work dictionary
+                    workDictionary = workDictionary['layerB']
+                    i += 1
+                workDictionary[factorName] = material.diffuse_intensity
+                if layerCount - currentLayer != 0:  # if current layer was A set work dictionary to B
+                    workDictionary = workDictionary['layerB']
     if not ignoreSpecular:
         if material.specular_shader == "COOKTORR":
             materialType = "torrance"
@@ -189,21 +211,19 @@ for i in range(len(materials)):
         if layerCount != 1:  # if blend Material
             if addedLayer:
                 addedLayer = False
-                factorName = "factor%c" % chr(65 + (currentLayer-1))
-                dataDictionary['materials'][material.name][factorName] = material.specular_intensity
-            if currentLayer == layerCount:
-                continue
-            nextLayerName = "layer%c" % chr(65 + currentLayer)
-            workDictionary = dataDictionary['materials'][material.name][nextLayerName]
-            continue
-    if material.emit != 0:
-        materialType = "emissive"
-        workDictionary['type'] = materialType
-        workDictionary['radiance'] = ([material.diffuse_color.r, material.diffuse_color.g, material.diffuse_color.b])
-        workDictionary['scale'] = material.emit
-        currentLayer += 1
-        factorName = "factor%c" % chr(65 + (currentLayer - 1))
-        dataDictionary['materials'][material.name][factorName] = 1
+                factorName = ""
+                if layerCount - currentLayer == 0:  # check if current layer was A or B
+                    factorName = "factorB"
+                else:
+                    factorName = "factorA"
+                workDictionary = dataDictionary['materials'][material.name]
+                i = 0
+                while materialDepth - i > 1:  # go to the root dictionary of the work dictionary
+                    workDictionary = workDictionary['layerB']
+                    i += 1
+                workDictionary[factorName] = material.specular_intensity
+                if layerCount - currentLayer != 0:  # if current layer was A set work dictionary to B
+                    workDictionary = workDictionary['layerB']
     if currentLayer != layerCount:
         print("Error: Expected %d layers but %d were used at material: \"%s\"" % (layerCount,currentLayer ,material.name))
     # TODO Other Materials (walter (roughness = 1-material.raytrace_transparency_gloss_factor ))
