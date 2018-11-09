@@ -3,6 +3,7 @@ from mathutils import Vector
 import os
 import json
 import collections
+import struct
 
 version = "0.1"
 binary = "Path/To/Binary.bin"
@@ -249,6 +250,13 @@ file = open(os.path.splitext(bpy.data.filepath)[0] + ".json", 'w')
 file.write(json.dumps(dataDictionary, indent=4))
 file.close()
 
+
+
+
+
+
+
+
 # Binary
 binary = bytearray()
 # Materials Header
@@ -284,40 +292,85 @@ for i in range(len(materialNameLengths)):
 
 # Objects Header
 
+# Type
 binary.extend("Objs".encode())
-
-bytePosition += 4 + 8 # Type and next section start position
+nextSectionStartBinaryPosition = len(binary)  # Save Position in binary has to be corrected later
+# Next section start position
+binary.extend((0).to_bytes(8, byteorder='little'))  # has to be corrected when the value is known
 
 countOfObjects = 0
-bytePosition += 4
 objects = bpy.data.objects
 
 for i in range(len(objects)):
     if objects[i].type != "MESH":
         continue
     countOfObjects += 1
-    bytePosition += 8 # for the object start positions
 
-flags = 0
-bytePosition += 4
-
-objectStartPositions = []
-objectNames = []
-objectNameLengths = []
-for i in range(len(objects)):
-    if objects[i].type != "MESH":
-        continue
-    objectStartPositions.append(bytePosition)
-    bytePosition += 4 # for the Type check
-    objectNames.append(object.name.encode())
-    objectNameLength = len(object.name.encode())
-    objectNameLengths.append(objectNameLength.to_bytes(4, byteorder='little'))
-    bytePosition += 4 + objectNameLength
-    # TODO Finish Object
-
-binary.extend(bytePosition.to_bytes(8, byteorder='little'))
 binary.extend(countOfObjects.to_bytes(4, byteorder='little'))
 
+objectStartBinaryPosition = []  # Save Position in binary to set this correct later
+for i in range(countOfObjects):
+    objectStartBinaryPosition.append(len(binary))
+    binary.extend((0).to_bytes(8, byteorder='little'))  # has to be corrected when the value is known
+
+flags = 0
+binary.extend(flags.to_bytes(4, byteorder='little'))  # has to be corrected when the value is known
+
+currentObjectNumber = 0
+meshes = bpy.data.meshes
+usedMeshes = []
+for i in range(len(objects)):
+    currentObject = objects[i]
+    if currentObject.type != "MESH":
+        continue
+    if "Lod" in currentObject.keys():  # TODO the name 'LoD' still has to be specified
+        continue
+    if currentObject in usedMeshes:
+        continue
+    usedMeshes.append(currentObject.data)
+    objectStartPosition = len(binary).to_bytes(4, byteorder='little')
+    for j in range(4):
+        binary[objectStartBinaryPosition[currentObjectNumber]+j] = objectStartPosition[j]
+    currentObjectNumber += 1
+    # Type check
+    binary.extend("Obj_".encode())
+    # Object name
+    objectName = currentObject.data.name.encode()
+    objectNameLength = len(objectName)
+    binary.extend(objectNameLength.to_bytes(4, byteorder='little'))
+    binary.extend(objectName)
+    # keyframe
+    binary.extend((0xFFFFFFFF).to_bytes(4, byteorder='little')) # TODO keyframes
+    # OBJID of previous object in animation
+    binary.extend((0xFFFFFFFF).to_bytes(4, byteorder='little'))  # TODO keyframes
+    # Bounding box
+    boundingBox = currentObject.bound_box
+    # Set bounding box min/max to last element of the bb
+    boundingBoxMin = [boundingBox[7][0], boundingBox[7][1], boundingBox[7][2]]
+    boundingBoxMax = [boundingBox[7][0], boundingBox[7][1], boundingBox[7][2]]
+    for j in range(7):  # 8-1
+        for k in range(3):  # x z y
+            if boundingBox[j][k] < boundingBoxMin[k]:
+                boundingBoxMin[k] = boundingBox[j][k]
+            if boundingBox[j][k] > boundingBoxMax[k]:
+                boundingBoxMax[k] = boundingBox[j][k]
+    binary.extend(struct.pack('<f', boundingBoxMin[0]))  # 0 2 1 is correct right handed -> left handed
+    binary.extend(struct.pack('<f', boundingBoxMin[2]))  # '<' = little endian 'f' = float
+    binary.extend(struct.pack('<f', boundingBoxMin[1]))
+    binary.extend(struct.pack('<f', boundingBoxMax[0]))
+    binary.extend(struct.pack('<f', boundingBoxMax[2]))
+    binary.extend(struct.pack('<f', boundingBoxMax[1]))
+    # <Jump Table>
+    # Number of entries in table (1 at the moment)
+    # TODO for loop for all jump table entries
+    binary.extend((1).to_bytes(4, byteorder='little'))
+    # start Positions
+    binary.extend((len(binary)+8).to_bytes(8, byteorder='little'))
+    # Type
+    binary.extend("LOD_".encode())
+    mesh = currentObject.data
+    lodLevel = currentObject.lod_levels
+    # TODO LOD
 
 
 binFile = open(os.path.splitext(bpy.data.filepath)[0] + ".mff", 'bw')
