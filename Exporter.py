@@ -5,6 +5,8 @@ import json
 import collections
 import struct
 
+# TODO Load old json (as dictionary) and override ONLY the existing data
+
 version = "0.1"
 binary = "Path/To/Binary.bin"
 
@@ -232,7 +234,7 @@ for i in range(len(materials)):
 # Scenarios
 
 dataDictionary['scenarios'][scn.name] = collections.OrderedDict()
-dataDictionary['scenarios'][scn.name]['camera'] = scn.camera.name
+dataDictionary['scenarios'][scn.name]['camera'] = scn.camera.name  # TODO default if no camera (Error message)
 dataDictionary['scenarios'][scn.name]['resolution'] = [scn.render.resolution_x, scn.render.resolution_y]
 lamps = bpy.data.lamps
 lights = []
@@ -240,7 +242,7 @@ for i in range(len(lamps)):
     lamp = lamps[i]
     if lamp.type == "POINT" or lamp.type == "SUN" or lamp.type == "SPOT":
         lights.append(lamp.name)
-dataDictionary['scenarios'][scn.name]['lights'] = lights
+dataDictionary['scenarios'][scn.name]['lights'] = lights  # TODO default if no light (No Light)
 dataDictionary['scenarios'][scn.name]['lod'] = 0
 # TODO Finish Scenarios (need binary for this)
 
@@ -323,10 +325,11 @@ for i in range(len(objects)):
     currentObject = objects[i]
     if currentObject.type != "MESH":
         continue
-    if "Lod" in currentObject.keys():  # TODO the name 'LoD' still has to be specified
+    if currentObject.data in usedMeshes:
         continue
-    if currentObject in usedMeshes:
-        continue
+    if len(currentObject.lod_levels) != 0:  # if object has LOD levels
+        if len(currentObject.data.edges) != 0:  # if it has geometry ( objects with LOD levels have no geometry)
+            continue
     usedMeshes.append(currentObject.data)
     objectStartPosition = len(binary).to_bytes(4, byteorder='little')
     for j in range(4):
@@ -361,17 +364,37 @@ for i in range(len(objects)):
     binary.extend(struct.pack('<f', boundingBoxMax[2]))
     binary.extend(struct.pack('<f', boundingBoxMax[1]))
     # <Jump Table>
-    # Number of entries in table (1 at the moment)
-    # TODO for loop for all jump table entries
-    binary.extend((1).to_bytes(4, byteorder='little'))
-    # start Positions
-    binary.extend((len(binary)+8).to_bytes(8, byteorder='little'))
-    # Type
-    binary.extend("LOD_".encode())
-    mesh = currentObject.data
-    lodLevel = currentObject.lod_levels
-    # TODO LOD
-
+    lodLevels = []
+    lodChainStart = 0
+    if len(currentObject.lod_levels) != 0:  # if it has Lod levels check depth of Lod levels
+        lodObject = currentObject.lod_levels[1].object
+        maxDistance = -1
+        lastLodChainObject = lodObject
+        while lodObject not in lodLevels:
+            lodLevels.append(lodObject)
+            if len(lodObject.lod_levels) == 0:
+                lodLevels = []
+                lodChainStart = 0
+                print("Warning: Skipped LOD levels from: \"%s\" because LOD Object: \"%s\" has no successor" % currentObject.name, lodObject.name)
+                break
+            if maxDistance < lodObject.lod_levels[1].distance:
+                maxDistance = lodObject.lod_levels[1].distance  # the last LOD level has the highest distance
+                lastLodChainObject = lodObject  # it is not lodObject.lod_levels[1].object because of the specification
+                lodChainStart = len(lodLevels)-1
+            lodObject = lodObject.lod_levels[1].object
+    if len(lodLevels) == 0:
+        lodLevels.append(currentObject)  # if no LOD levels the object itself ist the only LOD level
+    # Number of entries in table
+    binary.extend((len(lodLevels)).to_bytes(4, byteorder='little'))
+    lodStartBinaryPosition = []
+    for j in range(len(lodLevels)):
+        lodObject = lodLevels[(lodChainStart+j) % len(lodLevels)]  # for the correct starting position
+        # start Positions
+        lodStartBinaryPosition.append(len(binary))
+        binary.extend((0).to_bytes(8, byteorder='little'))  # TODO has to be corrected when the value is known
+        # Type
+        binary.extend("LOD_".encode())
+        mesh = lodObject.data
 
 binFile = open(os.path.splitext(bpy.data.filepath)[0] + ".mff", 'bw')
 binFile.write(binary)
