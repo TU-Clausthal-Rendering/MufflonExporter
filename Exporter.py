@@ -1,4 +1,5 @@
 import bpy
+import bmesh
 from mathutils import Vector
 import os
 import json
@@ -7,8 +8,9 @@ import struct
 import datetime
 
 # TODO Load old json (as dictionary) and override ONLY the existing data
-# TODO define export functions ()
-
+# TODO Warning if multiple Scenes exist
+# TODO Blender Integration (Text editor->Templates->Operator File Export )
+# TODO Apply Subivision Modifyer before exporting
 
 def export_json():
     version = "0.1"
@@ -413,27 +415,60 @@ def export_binary():
             # Type
             binary.extend("LOD_".encode())
             mesh = lodObject.data
-            polygons = mesh.polygons
-            # Number of Triangles
+            bm = bmesh.new()
+            bm.from_mesh(mesh)  # bmesh gives a local editable mesh copy
+            faces = bm.faces
+            faces.ensure_lookup_table()
+            facesToTriangulate = []
+            for k in range(len(faces)):
+                if len(faces[k].edges) > 4:
+                    facesToTriangulate.append(faces[k])
+                    print(k)
+            bmesh.ops.triangulate(bm, faces=facesToTriangulate[:], quad_method=0, ngon_method=0)
+            faces = bm.faces  # update faces
+            faces.ensure_lookup_table()
             numberOfTriangles = 0
-            numberOfTrianglesBinaryPosition = len(binary)
-            binary.extend(numberOfTriangles.to_bytes(8, byteorder='little'))  # TODO has to be corrected when the value is known
-            # Number of Quads
             numberOfQuads = 0
-            numberOfQuadsBinaryPosition = len(binary)
-            binary.extend(numberOfQuads.to_bytes(8, byteorder='little'))  # TODO has to be corrected when the value is known
-            # TODO number of spheres etc.
-            for k in range(len(polygons)):
-                numVertices = len(currentObject.data.polygons[k].vertices)
+            for k in range(len(faces)):
+                numVertices = len(currentObject.data.faces[k].verts)
                 if numVertices == 3:
                     numberOfTriangles += 1
                 elif numVertices == 4:
                     numberOfQuads += 1
                 else:
-                    print("Error: %d Vertices in polygon" % numVertices)
-                for l in range(numVertices):
-                    vertex = currentObject.data.polygons[k].vertices[l]
-
+                    print("Error: %d Vertices in face from object: %s" % (numVertices, lodObject.name))
+                    return
+            # Number of Triangles
+            binary.extend(numberOfTriangles.to_bytes(8, byteorder='little'))
+            # Number of Quads
+            binary.extend(numberOfQuads.to_bytes(8, byteorder='little'))
+            # Number of Spheres
+            numberOfSpheres = 0
+            numberOfSpheresBinaryPosition = len(binary)
+            binary.extend(numberOfSpheres.to_bytes(8, byteorder='little'))  # TODO has to be corrected when the value is known
+            # Number of Vertices
+            numberOfVertices = len(bm.verts)
+            binary.extend(numberOfVertices.to_bytes(8, byteorder='little'))
+            # Number of Edges
+            numberOfEdges = len(bm.edges)
+            binary.extend(numberOfEdges.to_bytes(8, byteorder='little'))
+            # Number of Vertex Attributes
+            numberOfVertexAttributes = 0  # TODO Vertex Attributes
+            binary.extend(numberOfVertexAttributes.to_bytes(8, byteorder='little'))
+            # Number of Face Attributes
+            numberOfFaceAttributes = 0  # TODO Face Attributes
+            binary.extend(numberOfFaceAttributes.to_bytes(8, byteorder='little'))
+            # Number of Sphere Attributes
+            numberOfSphereAttributes = 0  # TODO Sphere Attributes
+            binary.extend(numberOfSphereAttributes.to_bytes(8, byteorder='little'))
+            # Vertex data
+            vertices = bm.verts
+            for k in range(len(vertices)):
+                vertex = vertices[k]
+                coordinates = vertex.co
+                binary.extend(coordinates[0].to_bytes(8, byteorder='little'))
+                binary.extend(coordinates[2].to_bytes(8, byteorder='little'))
+                binary.extend(coordinates[1].to_bytes(8, byteorder='little'))
 
     binFile = open(os.path.splitext(bpy.data.filepath)[0] + ".mff", 'bw')
     binFile.write(binary)
