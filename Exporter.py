@@ -8,6 +8,15 @@ import datetime
 
 # TODO Load old json (as dictionary) and override ONLY the existing data
 # TODO define export functions ()
+bl_info = {
+        "name": "Mufflon Exporter",
+		"description": "Exporter for the custom Mufflon file format",
+		"author": "Marvin",
+		"version": (0, 1),
+		"blender": (2, 69, 0),
+		"location": "File > Export > Mufflon (.json/.mff)",
+		"category": "Import-Export"
+}
 
 
 def export_json(context, filepath, binfilepath):
@@ -269,7 +278,7 @@ def export_json(context, filepath, binfilepath):
 
     print(json.dumps(dataDictionary, indent=4))
 
-    file = open(filename + ".json", 'w')
+    file = open(filepath, 'w')
     file.write(json.dumps(dataDictionary, indent=4))
     file.close()
     return 0
@@ -435,7 +444,7 @@ def export_binary(context, filepath):
                     vertex = currentObject.data.polygons[k].vertices[l]
 
 
-    binFile = open(os.path.splitext(bpy.data.filepath)[0] + ".mff", 'bw')
+    binFile = open(filepath, 'bw')
     binFile.write(binary)
     binFile.close()
     return 0
