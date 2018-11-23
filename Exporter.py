@@ -12,11 +12,11 @@ import datetime
 # TODO Blender Integration (Text editor->Templates->Operator File Export )
 # TODO Apply Subivision Modifyer before exporting
 
-def export_json():
+def export_json(context, filepath, binfilepath):
     version = "0.1"
-    binary = "Path/To/Binary.bin"
+    binary = binfilepath
 
-    scn = bpy.context.scene
+    scn = context.scene
 
     dataDictionary = collections.OrderedDict()
     dataDictionary['version'] = version
@@ -271,14 +271,14 @@ def export_json():
 
     print(json.dumps(dataDictionary, indent=4))
 
-    file = open(os.path.splitext(bpy.data.filepath)[0] + ".json", 'w')
+    file = open(filename + ".json", 'w')
     file.write(json.dumps(dataDictionary, indent=4))
     file.close()
     return 0
 
 
-def export_binary():
-# Binary
+def export_binary(context, filepath):
+    # Binary
     binary = bytearray()
     # Materials Header
     binary.extend("Mats".encode())
@@ -476,16 +476,61 @@ def export_binary():
     return 0
 
 
-def main():
-    if export_json() == 0:
-        print("[%s] Exported JSON successfully" % str(datetime.datetime.now().time()).split('.')[0])
-        if export_binary() == 0:
-            print("[%s] Exported binary successfully" % str(datetime.datetime.now().time()).split('.')[0])
-        else:
-            print("[%s] Export of binary failed" % str(datetime.datetime.now().time()).split('.')[0])
-    else:
-        print("[%s] Export of JSON failed" % str(datetime.datetime.now().time()).split('.')[0])
+def export_mufflon(context, filepath):
+    filename = os.path.splitext(filepath)[0]
+    binfilepath = filename + ".mff"
+    export_json(context, filepath, binfilepath)
+    export_binary(context, binfilepath)
+    return {'FINISHED'}
 
 
-main()
+# ExportHelper is a helper class, defines filename and
+# invoke() function which calls the file selector.
+from bpy_extras.io_utils import (ExportHelper, path_reference_mode)
+from bpy.props import StringProperty, BoolProperty, EnumProperty
+from bpy.types import Operator
 
+
+class MufflonExporter(Operator, ExportHelper):
+    """This appears in the tooltip of the operator and in the generated docs"""
+    bl_idname = "mufflon.exporter"  # important since its how bpy.ops.import_test.some_data is constructed
+    bl_label = "Export Mufflon Scene"
+
+    # ExportHelper mixin class uses this
+    filename_ext = ".json"
+    filter_glob = StringProperty(
+            default="*.json;*.mff",
+            options={'HIDDEN'},
+            maxlen=255,  # Max internal buffer length, longer would be clamped.
+            )
+
+    # List of operator properties, the attributes will be assigned
+    # to the class instance from the operator settings before calling.
+    use_selection = BoolProperty(
+            name="Selection Only",
+            description="Export selected objects only",
+            default=False,
+            )
+    path_mode = path_reference_mode
+
+    def execute(self, context):
+        return export_mufflon(context, self.filepath)
+
+
+# Only needed if you want to add into a dynamic menu
+def menu_func_export(self, context):
+    self.layout.operator(MufflonExporter.bl_idname, text="Mufflon (.json/.mff)")
+
+
+def register():
+    bpy.utils.register_class(MufflonExporter)
+    bpy.types.INFO_MT_file_export.append(menu_func_export)
+
+
+def unregister():
+    bpy.utils.unregister_class(MufflonExporter)
+    bpy.types.INFO_MT_file_export.remove(menu_func_export)
+
+
+if __name__ == "__main__":
+    register()
