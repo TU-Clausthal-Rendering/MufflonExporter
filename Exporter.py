@@ -21,7 +21,7 @@ bl_info = {
 }
 
 def export_json(context, filepath, binfilepath):
-    version = "0.1"
+    version = "1.0"
     binary = binfilepath
 
     scn = context.scene
@@ -286,6 +286,7 @@ def export_json(context, filepath, binfilepath):
 
 
 def export_binary(context, filepath):
+    scn = context.scene
     # Binary
     binary = bytearray()
     # Materials Header
@@ -422,7 +423,7 @@ def export_binary(context, filepath):
             binary.extend((0).to_bytes(8, byteorder='little'))  # TODO has to be corrected when the value is known
             # Type
             binary.extend("LOD_".encode())
-            mesh = lodObject.data
+            mesh = lodObject.to_mesh(scn, True, calc_tessface=False, settings='RENDER')
             bm = bmesh.new()
             bm.from_mesh(mesh)  # bmesh gives a local editable mesh copy
             faces = bm.faces
@@ -438,7 +439,7 @@ def export_binary(context, filepath):
             numberOfTriangles = 0
             numberOfQuads = 0
             for k in range(len(faces)):
-                numVertices = len(currentObject.data.faces[k].verts)
+                numVertices = len(faces[k].verts)
                 if numVertices == 3:
                     numberOfTriangles += 1
                 elif numVertices == 4:
@@ -446,6 +447,8 @@ def export_binary(context, filepath):
                 else:
                     print("Error: %d Vertices in face from object: %s" % (numVertices, lodObject.name))
                     return
+            bm.to_mesh(mesh)
+            bm.free()
             # Number of Triangles
             binary.extend(numberOfTriangles.to_bytes(8, byteorder='little'))
             # Number of Quads
@@ -455,10 +458,10 @@ def export_binary(context, filepath):
             numberOfSpheresBinaryPosition = len(binary)
             binary.extend(numberOfSpheres.to_bytes(8, byteorder='little'))  # TODO has to be corrected when the value is known
             # Number of Vertices
-            numberOfVertices = len(bm.verts)
+            numberOfVertices = len(mesh.vertices)
             binary.extend(numberOfVertices.to_bytes(8, byteorder='little'))
             # Number of Edges
-            numberOfEdges = len(bm.edges)
+            numberOfEdges = len(mesh.edges)
             binary.extend(numberOfEdges.to_bytes(8, byteorder='little'))
             # Number of Vertex Attributes
             numberOfVertexAttributes = 0  # TODO Vertex Attributes
@@ -470,13 +473,18 @@ def export_binary(context, filepath):
             numberOfSphereAttributes = 0  # TODO Sphere Attributes
             binary.extend(numberOfSphereAttributes.to_bytes(8, byteorder='little'))
             # Vertex data
-            vertices = bm.verts
+            mesh.calc_normals()
+            vertices = mesh.vertices
             for k in range(len(vertices)):
                 vertex = vertices[k]
                 coordinates = vertex.co
-                binary.extend(coordinates[0].to_bytes(8, byteorder='little'))
-                binary.extend(coordinates[2].to_bytes(8, byteorder='little'))
-                binary.extend(coordinates[1].to_bytes(8, byteorder='little'))
+                binary.extend(struct.pack('<f', coordinates[0]))
+                binary.extend(struct.pack('<f', coordinates[2]))
+                binary.extend(struct.pack('<f', coordinates[1]))
+                normal = vertex.normal
+                binary.extend(struct.pack('<f', normal[0]))
+                binary.extend(struct.pack('<f', normal[2]))
+                binary.extend(struct.pack('<f', normal[1]))
 
     binFile = open(filepath, 'bw')
     binFile.write(binary)
