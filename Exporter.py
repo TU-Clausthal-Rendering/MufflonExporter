@@ -24,7 +24,7 @@ bl_info = {
 
 def export_json(context, filepath, binfilepath):
     version = "1.0"
-    binary = binfilepath
+    binary = os.path.relpath(binfilepath, os.path.commonpath([filepath, binfilepath]))
 
     scn = context.scene
 
@@ -334,7 +334,7 @@ def export_binary(context, filepath):
 
     # Type
     binary.extend("Objs".encode())
-    nextSectionStartBinaryPosition = len(binary)  # Save Position in binary has to be corrected later
+    instanceSectionStartBinaryPosition = len(binary)  # Save Position in binary has to be corrected later
     # Next section start position
     binary.extend((0).to_bytes(8, byteorder='little'))  # has to be corrected when the value is known
 
@@ -373,6 +373,8 @@ def export_binary(context, filepath):
         for j in range(4):
             binary[objectStartBinaryPosition[currentObjectNumber]+j] = objectStartPosition[j]
         currentObjectNumber += 1
+		# Write the object flags (TODO: compression and deflation)
+        binary.extend((0x00000000).to_bytes(4, byteorder='little'))
         # Type check
         binary.extend("Obj_".encode())
         # Object name
@@ -428,8 +430,9 @@ def export_binary(context, filepath):
         for j in range(len(lodLevels)):
             lodObject = lodLevels[(lodChainStart+j) % len(lodLevels)]  # for the correct starting position
             # start Positions
-            lodStartBinaryPosition.append(len(binary))
-            binary.extend((0).to_bytes(8, byteorder='little'))  # TODO has to be corrected when the value is known
+            lodStart = len(binary) + 8
+            print(lodStart)
+            binary.extend(lodStart.to_bytes(8, byteorder='little'))  # TODO has to be corrected when the value is known
             # Type
             binary.extend("LOD_".encode())
             mesh = lodObject.to_mesh(scn, True, calc_tessface=False, settings='RENDER')
@@ -445,10 +448,10 @@ def export_binary(context, filepath):
             bmesh.ops.triangulate(bm, faces=facesToTriangulate[:], quad_method=0, ngon_method=0)
 
             # mark seams from uv islands
-            bpy.ops.uv.seams_from_islands()
-            seams = [e for e in bm.edges if e.seam]
+            #bpy.ops.uv.seams_from_islands()
+            #seams = [e for e in bm.edges if e.seam]
             # split on seams
-            bmesh.ops.split_edges(bm, edges=seams)
+            #bmesh.ops.split_edges(bm, edges=seams)
 
             faces = bm.faces  # update faces
             faces.ensure_lookup_table()
@@ -544,7 +547,14 @@ def export_binary(context, filepath):
             # TODO Spheres
 
             bpy.data.meshes.remove(mesh)
-        # TODO Instances
+    
+    # TODO Instances
+    instanceStartPosition = len(binary).to_bytes(8, byteorder='little')
+    for i in range(8):
+        binary[instanceSectionStartBinaryPosition + i] = instanceStartPosition[i]
+    binary.extend("Inst".encode())
+    binary.extend((0).to_bytes(4, byteorder='little'))
+	
     binFile = open(filepath, 'bw')
     binFile.write(binary)
     binFile.close()
@@ -584,6 +594,16 @@ class MufflonExporter(Operator, ExportHelper):
     use_selection = BoolProperty(
             name="Selection Only",
             description="Export selected objects only",
+            default=True,
+            )
+    use_selection = BoolProperty(
+            name="Compress normals",
+            description="Apply compression to vertex normals (Octahedral)",
+            default=False,
+            )
+    use_selection = BoolProperty(
+            name="Deflate",
+            description="Use deflation to reduce file size",
             default=False,
             )
     path_mode = path_reference_mode
