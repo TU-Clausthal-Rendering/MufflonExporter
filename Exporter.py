@@ -277,7 +277,14 @@ def export_json(context, filepath, binfilepath):
 
     dataDictionary['scenarios'][scn.name]['lights'] = lights
     dataDictionary['scenarios'][scn.name]['lod'] = 0
-    # TODO Finish Scenarios (need binary for this)
+
+    dataDictionary['scenarios'][scn.name]['materialAssignments'] = collections.OrderedDict()
+
+    for material in materials:
+        dataDictionary['scenarios'][scn.name]['materialAssignments'][material.name] = material.name
+
+    dataDictionary['scenarios'][scn.name]['objectProperties'] = collections.OrderedDict()
+    # TODO objectProperties
 
     print(json.dumps(dataDictionary, indent=4))
 
@@ -537,6 +544,7 @@ def export_binary(context, filepath):
             # TODO Spheres
 
             bpy.data.meshes.remove(mesh)
+        # TODO Instances
     binFile = open(filepath, 'bw')
     binFile.write(binary)
     binFile.close()
