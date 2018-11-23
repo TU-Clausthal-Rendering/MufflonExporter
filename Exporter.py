@@ -6,6 +6,8 @@ import json
 import collections
 import struct
 import datetime
+import numpy
+import math
 
 # TODO Load old json (as dictionary) and override ONLY the existing data
 # TODO Warning if multiple Scenes exist
@@ -434,6 +436,13 @@ def export_binary(context, filepath):
                     facesToTriangulate.append(faces[k])
                     print(k)
             bmesh.ops.triangulate(bm, faces=facesToTriangulate[:], quad_method=0, ngon_method=0)
+
+            # mark seams from uv islands
+            bpy.ops.uv.seams_from_islands()
+            seams = [e for e in bm.edges if e.seam]
+            # split on seams
+            bmesh.ops.split_edges(bm, edges=seams)
+
             faces = bm.faces  # update faces
             faces.ensure_lookup_table()
             numberOfTriangles = 0
@@ -450,33 +459,45 @@ def export_binary(context, filepath):
             bm.to_mesh(mesh)
             bm.free()
             # Number of Triangles
-            binary.extend(numberOfTriangles.to_bytes(8, byteorder='little'))
+            binary.extend(numberOfTriangles.to_bytes(4, byteorder='little'))
             # Number of Quads
-            binary.extend(numberOfQuads.to_bytes(8, byteorder='little'))
+            binary.extend(numberOfQuads.to_bytes(4, byteorder='little'))
             # Number of Spheres
             numberOfSpheres = 0
             numberOfSpheresBinaryPosition = len(binary)
-            binary.extend(numberOfSpheres.to_bytes(8, byteorder='little'))  # TODO has to be corrected when the value is known
+            binary.extend(numberOfSpheres.to_bytes(4, byteorder='little'))  # TODO has to be corrected when the value is known
             # Number of Vertices
             numberOfVertices = len(mesh.vertices)
-            binary.extend(numberOfVertices.to_bytes(8, byteorder='little'))
+            binary.extend(numberOfVertices.to_bytes(4, byteorder='little'))
             # Number of Edges
             numberOfEdges = len(mesh.edges)
-            binary.extend(numberOfEdges.to_bytes(8, byteorder='little'))
+            binary.extend(numberOfEdges.to_bytes(4, byteorder='little'))
             # Number of Vertex Attributes
             numberOfVertexAttributes = 0  # TODO Vertex Attributes
-            binary.extend(numberOfVertexAttributes.to_bytes(8, byteorder='little'))
+            binary.extend(numberOfVertexAttributes.to_bytes(4, byteorder='little'))
             # Number of Face Attributes
             numberOfFaceAttributes = 0  # TODO Face Attributes
-            binary.extend(numberOfFaceAttributes.to_bytes(8, byteorder='little'))
+            binary.extend(numberOfFaceAttributes.to_bytes(4, byteorder='little'))
             # Number of Sphere Attributes
             numberOfSphereAttributes = 0  # TODO Sphere Attributes
-            binary.extend(numberOfSphereAttributes.to_bytes(8, byteorder='little'))
+            binary.extend(numberOfSphereAttributes.to_bytes(4, byteorder='little'))
             # Vertex data
-            mesh.calc_normals()
             vertices = mesh.vertices
+            mesh.calc_normals()
+            uvCoordinates = numpy.empty(len(vertices), dtype=object)
+            if len(mesh.uv_layers) == 0:
+                print("Warning: LOD Object: \"%s\" has no uv layers" % (lodObject.name))
+                for k in range(len(uvCoordinates)):
+                    acos = math.acos(vertices[k].co[1]/(math.sqrt((vertices[k].co[0]*vertices[k].co[0]) + (vertices[k].co[1]*vertices[k].co[1]) + (vertices[k].co[2]*vertices[k].co[2]))))
+                    arctan2 = numpy.arctan2(vertices[k].co[2], vertices[k].co[0])
+                    uvCoordinates[k] = [acos, arctan2]
+            else:
+                uv_layer = mesh.uv_layers.active.data
+                for polygon in mesh.polygons:
+                    for loop_index in range(polygon.loop_start, polygon.loop_start + polygon.loop_total):
+                        uvCoordinates[mesh.loops[loop_index].vertex_index] = uv_layer[loop_index].uv
             for k in range(len(vertices)):
-                vertex = vertices[k]
+                vertex = mesh.vertices[k]
                 coordinates = vertex.co
                 binary.extend(struct.pack('<f', coordinates[0]))
                 binary.extend(struct.pack('<f', coordinates[2]))
@@ -485,7 +506,37 @@ def export_binary(context, filepath):
                 binary.extend(struct.pack('<f', normal[0]))
                 binary.extend(struct.pack('<f', normal[2]))
                 binary.extend(struct.pack('<f', normal[1]))
+                # uv
+                binary.extend(struct.pack('<f', uvCoordinates[k][0]))
+                binary.extend(struct.pack('<f', uvCoordinates[k][1]))
+            # Attributes
+            # TODO Attributes
+            # Triangles
+            for polygon in mesh.polygons:
+                if len(polygon.vertices) == 3:
+                    binary.extend(polygon.vertices[0].to_bytes(4, byteorder='little'))
+                    binary.extend(polygon.vertices[1].to_bytes(4, byteorder='little'))
+                    binary.extend(polygon.vertices[2].to_bytes(4, byteorder='little'))
+            # Quads
+            for polygon in mesh.polygons:
+                if len(polygon.vertices) == 4:
+                    binary.extend(polygon.vertices[0].to_bytes(4, byteorder='little'))
+                    binary.extend(polygon.vertices[1].to_bytes(4, byteorder='little'))
+                    binary.extend(polygon.vertices[2].to_bytes(4, byteorder='little'))
+                    binary.extend(polygon.vertices[3].to_bytes(4, byteorder='little'))
+            # Material IDs
+            for polygon in mesh.polygons:
+                if len(polygon.vertices) == 3:
+                    binary.extend(polygon.material_index.to_bytes(2, byteorder='little'))
+            for polygon in mesh.polygons:
+                if len(polygon.vertices) == 4:
+                    binary.extend(polygon.material_index.to_bytes(2, byteorder='little'))
+            # Face Attributes
+            # TODO Face Attributes
+            # Spheres
+            # TODO Spheres
 
+            bpy.data.meshes.remove(mesh)
     binFile = open(filepath, 'bw')
     binFile.write(binary)
     binFile.close()
