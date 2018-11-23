@@ -10,6 +10,15 @@ import datetime
 # TODO Load old json (as dictionary) and override ONLY the existing data
 # TODO Warning if multiple Scenes exist
 # TODO Apply Subivision Modifyer before exporting
+bl_info = {
+        "name": "Mufflon Exporter",
+		"description": "Exporter for the custom Mufflon file format",
+		"author": "Marvin",
+		"version": (0, 1),
+		"blender": (2, 69, 0),
+		"location": "File > Export > Mufflon (.json/.mff)",
+		"category": "Import-Export"
+}
 
 def export_json(context, filepath, binfilepath):
     version = "0.1"
