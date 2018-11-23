@@ -9,7 +9,6 @@ import datetime
 
 # TODO Load old json (as dictionary) and override ONLY the existing data
 # TODO Warning if multiple Scenes exist
-# TODO Blender Integration (Text editor->Templates->Operator File Export )
 # TODO Apply Subivision Modifyer before exporting
 
 def export_json(context, filepath, binfilepath):
@@ -271,7 +270,7 @@ def export_json(context, filepath, binfilepath):
 
     print(json.dumps(dataDictionary, indent=4))
 
-    file = open(filename + ".json", 'w')
+    file = open(filepath, 'w')
     file.write(json.dumps(dataDictionary, indent=4))
     file.close()
     return 0
@@ -470,7 +469,7 @@ def export_binary(context, filepath):
                 binary.extend(coordinates[2].to_bytes(8, byteorder='little'))
                 binary.extend(coordinates[1].to_bytes(8, byteorder='little'))
 
-    binFile = open(os.path.splitext(bpy.data.filepath)[0] + ".mff", 'bw')
+    binFile = open(filepath, 'bw')
     binFile.write(binary)
     binFile.close()
     return 0
