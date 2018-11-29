@@ -359,6 +359,8 @@ def export_binary(context, filepath):
     currentObjectNumber = 0
     meshes = bpy.data.meshes
     usedMeshes = []
+    mode = context.active_object.mode
+    bpy.ops.object.mode_set(mode='EDIT')
     for i in range(len(objects)):
         currentObject = objects[i]
         if currentObject.type != "MESH":
@@ -426,13 +428,15 @@ def export_binary(context, filepath):
             lodLevels.append(currentObject)  # if no LOD levels the object itself ist the only LOD level
         # Number of entries in table
         binary.extend((len(lodLevels)).to_bytes(4, byteorder='little'))
-        lodStartBinaryPosition = []
+        lodStartBinaryPosition = len(binary)
         for j in range(len(lodLevels)):
-            lodObject = lodLevels[(lodChainStart+j) % len(lodLevels)]  # for the correct starting position
+            binary.extend((0).to_bytes(8, byteorder='little'))  # has to be corrected when the value is known
+        for j in range(len(lodLevels)):
+            lodObject = lodLevels[(lodChainStart+j) % len(lodLevels)]  # for the correct starting object
             # start Positions
-            lodStart = len(binary) + 8
-            print(lodStart)
-            binary.extend(lodStart.to_bytes(8, byteorder='little'))  # TODO has to be corrected when the value is known
+            lodStartPosition = len(binary).to_bytes(8, byteorder='little')
+            for k in range(8):
+                binary[lodStartBinaryPosition + k + j*8] = lodStartPosition[i]
             # Type
             binary.extend("LOD_".encode())
             mesh = lodObject.to_mesh(scn, True, calc_tessface=False, settings='RENDER')
@@ -447,11 +451,12 @@ def export_binary(context, filepath):
                     print(k)
             bmesh.ops.triangulate(bm, faces=facesToTriangulate[:], quad_method=0, ngon_method=0)
 
+            # Split vertices if vertex has multiple uv coordinates (is used in multiple triangles)
             # mark seams from uv islands
-            #bpy.ops.uv.seams_from_islands()
-            #seams = [e for e in bm.edges if e.seam]
+            bpy.ops.uv.seams_from_islands()
+            seams = [e for e in bm.edges if e.seam]
             # split on seams
-            #bmesh.ops.split_edges(bm, edges=seams)
+            bmesh.ops.split_edges(bm, edges=seams)
 
             faces = bm.faces  # update faces
             faces.ensure_lookup_table()
@@ -547,7 +552,8 @@ def export_binary(context, filepath):
             # TODO Spheres
 
             bpy.data.meshes.remove(mesh)
-    
+    # reset used mode
+    bpy.ops.object.mode_set(mode=mode)
     # TODO Instances
     instanceStartPosition = len(binary).to_bytes(8, byteorder='little')
     for i in range(8):
