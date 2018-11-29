@@ -230,6 +230,7 @@ def export_json(context, filepath, binfilepath):
                 workDictionary['type'] = materialType
                 workDictionary['albedo'] = ([material.specular_color.r, material.specular_color.g, material.specular_color.b])
                 workDictionary['roughness'] = material.specular_hardness / 511  # Max hardness = 511
+                workDictionary['ndf'] = "BS" # Default normal distribution function TODO: custom property
                 currentLayer += 1
                 addedLayer = True
             if layerCount != 1:  # if blend Material
@@ -436,7 +437,7 @@ def export_binary(context, filepath):
             # start Positions
             lodStartPosition = len(binary).to_bytes(8, byteorder='little')
             for k in range(8):
-                binary[lodStartBinaryPosition + k + j*8] = lodStartPosition[i]
+                binary[lodStartBinaryPosition + k + j*8] = lodStartPosition[k]
             # Type
             binary.extend("LOD_".encode())
             mesh = lodObject.to_mesh(scn, True, calc_tessface=False, settings='RENDER')
