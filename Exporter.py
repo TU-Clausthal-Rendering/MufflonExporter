@@ -563,6 +563,20 @@ def export_binary(context, filepath):
     numberOfInstancesBinaryPosition = len(binary)
     binary.extend((0).to_bytes(4, byteorder='little'))  # TODO has to be corrected later
 
+    for i in range(len(objects)):
+        currentObject = objects[i]
+        if currentObject.type != "MESH":
+            continue
+        if len(currentObject.lod_levels) != 0:  # if object has LOD levels
+            if len(currentObject.data.vertices) != 0:  # if it has data ( objects with LOD have no data, but the LODs are objects too and have data skip them)
+                continue
+        for j in range(len(usedMeshes)):
+            if usedMeshes[j] == currentObject.data:
+                binary.extend(j.to_bytes(4, byteorder='little'))  # Object ID
+            binary.extend((0xFFFFFFFF).to_bytes(4, byteorder='little'))  # TODO Keyframe
+            binary.extend((0xFFFFFFFF).to_bytes(4, byteorder='little'))  # TODO Instance ID
+            # TODO 3x4 transformation matrix
+
     binFile = open(filepath, 'bw')
     binFile.write(binary)
     binFile.close()
@@ -572,7 +586,7 @@ def export_binary(context, filepath):
 def export_mufflon(context, filepath):
     filename = os.path.splitext(filepath)[0]
     binfilepath = filename + ".mff"
-    export_json(context, filepath, binfilepath)
+    export_json(context, filepath, binfilepath)  # TODO Stop when failed (not now for easier testing)
     export_binary(context, binfilepath)
     return {'FINISHED'}
 
