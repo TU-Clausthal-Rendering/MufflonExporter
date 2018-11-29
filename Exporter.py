@@ -368,14 +368,14 @@ def export_binary(context, filepath):
         if currentObject.data in usedMeshes:
             continue
         if len(currentObject.lod_levels) != 0:  # if object has LOD levels
-            if currentObject.data is None:  # if it has data ( objects with LOD levels have no data)
+            if len(currentObject.data.vertices) != 0:  # if it has data ( objects with LOD have no data, but the LODs are objects too and have data skip them)
                 continue
         usedMeshes.append(currentObject.data)
         objectStartPosition = len(binary).to_bytes(4, byteorder='little')
         for j in range(4):
             binary[objectStartBinaryPosition[currentObjectNumber]+j] = objectStartPosition[j]
         currentObjectNumber += 1
-		# Write the object flags (TODO: compression and deflation)
+        # Write the object flags (TODO: compression and deflation)
         binary.extend((0x00000000).to_bytes(4, byteorder='little'))
         # Type check
         binary.extend("Obj_".encode())
@@ -449,14 +449,15 @@ def export_binary(context, filepath):
                 if len(faces[k].edges) > 4:
                     facesToTriangulate.append(faces[k])
                     print(k)
-            bmesh.ops.triangulate(bm, faces=facesToTriangulate[:], quad_method=0, ngon_method=0)
 
+            bmesh.ops.triangulate(bm, faces=facesToTriangulate[:], quad_method=0, ngon_method=0)
             # Split vertices if vertex has multiple uv coordinates (is used in multiple triangles)
-            # mark seams from uv islands
-            bpy.ops.uv.seams_from_islands()
-            seams = [e for e in bm.edges if e.seam]
-            # split on seams
-            bmesh.ops.split_edges(bm, edges=seams)
+            if len(lodObject.data.uv_layers):
+                # mark seams from uv islands
+                bpy.ops.uv.seams_from_islands()
+                seams = [e for e in bm.edges if e.seam]
+                # split on seams
+                bmesh.ops.split_edges(bm, edges=seams)
 
             faces = bm.faces  # update faces
             faces.ensure_lookup_table()
@@ -559,8 +560,9 @@ def export_binary(context, filepath):
     for i in range(8):
         binary[instanceSectionStartBinaryPosition + i] = instanceStartPosition[i]
     binary.extend("Inst".encode())
-    binary.extend((0).to_bytes(4, byteorder='little'))
-	
+    numberOfInstancesBinaryPosition = len(binary)
+    binary.extend((0).to_bytes(4, byteorder='little'))  # TODO has to be corrected later
+
     binFile = open(filepath, 'bw')
     binFile.write(binary)
     binFile.close()
