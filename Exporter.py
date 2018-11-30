@@ -69,7 +69,7 @@ def export_json(context, filepath, binfilepath):
             orthoHeight = scn.render.resolution_y / scn.render.resolution_x * orthoWidth  # get aspect ratio via resolution
             dataDictionary['cameras'][camera.name]['height'] = orthoHeight
         else:
-            print("Skipping unsupported camera type: \"%s\" from: \"%s\"" % camera.type, camera.name)
+            print("Warning: Skipping unsupported camera type: \"%s\" from: \"%s\"" % camera.type, camera.name)
             continue
         cameraPath = []
         viewDirectionPath = []
@@ -94,7 +94,7 @@ def export_json(context, filepath, binfilepath):
         dataDictionary['cameras'][camera.name]['up'] = upPath
 
     if len(dataDictionary['cameras']) == 0:
-        print("Stopped exporting: No camera found")  # Stop if no camera was exported
+        print("Error: No camera found")  # Stop if no camera was exported
         return -1
 
     # Lights
@@ -131,7 +131,7 @@ def export_json(context, filepath, binfilepath):
             dataDictionary['lights'][lamp.name]['width'] = lamp.spot_size / 2
             dataDictionary['lights'][lamp.name]['falloffStart'] = lamp.spot_size / 2
         else:
-            print("Skipping unsupported lamp type: \"%s\" from: \"%s\"" % lamp.type, lamp.name)
+            print("Warning: Skipping unsupported lamp type: \"%s\" from: \"%s\"" % lamp.type, lamp.name)
             continue
         # TODO envmap, goniometric
 
@@ -146,6 +146,7 @@ def export_json(context, filepath, binfilepath):
         workDictionary = {}
         ignoreDiffuse = True
         ignoreSpecular = True
+        addedLayer = False
         if material.diffuse_shader == "LAMBERT" or material.diffuse_shader == "OREN_NAYAR" or material.diffuse_shader == "FRESNEL":
             if material.diffuse_intensity != 0:  # ignore if factor == 0
                 layerCount += 1
@@ -168,7 +169,11 @@ def export_json(context, filepath, binfilepath):
             dataDictionary['materials'][material.name]['layerB'] = collections.OrderedDict()
             workDictionary = dataDictionary['materials'][material.name]['layerA']
         else:
-            print("Skipping unsupported material:\"%s\"" % material.name)
+            print("Warning: Initialised unsupported material: \"%s\" as lambert material." % material.name)
+            materialType = "lambert"
+            dataDictionary['materials'][material.name] = collections.OrderedDict()
+            dataDictionary['materials'][material.name]['type'] = materialType
+            dataDictionary['materials'][material.name]['albedo'] = ([material.diffuse_color.r, material.diffuse_color.g, material.diffuse_color.b])
             continue
         currentLayer = 0
         if material.emit != 0:
@@ -190,7 +195,6 @@ def export_json(context, filepath, binfilepath):
                     workDictionary['layerB'] = collections.OrderedDict()
                     workDictionary = workDictionary['layerA']
         if not ignoreDiffuse:
-            addedLayer = False
             if material.diffuse_shader == "LAMBERT":
                 materialType = "lambert"
                 workDictionary['type'] = materialType
@@ -231,13 +235,11 @@ def export_json(context, filepath, binfilepath):
                 workDictionary['type'] = materialType
                 workDictionary['albedo'] = ([material.specular_color.r, material.specular_color.g, material.specular_color.b])
                 workDictionary['roughness'] = material.specular_hardness / 511  # Max hardness = 511
-                workDictionary['ndf'] = "BS" # Default normal distribution function TODO: custom property
+                workDictionary['ndf'] = "BS"  # Default normal distribution function TODO: custom property
                 currentLayer += 1
                 addedLayer = True
             if layerCount != 1:  # if blend Material
                 if addedLayer:
-                    addedLayer = False
-                    factorName = ""
                     if layerCount - currentLayer == 0:  # check if current layer was A or B
                         factorName = "factorB"
                     else:
