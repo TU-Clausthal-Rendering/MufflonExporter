@@ -11,16 +11,17 @@ import math
 
 # TODO Load old json (as dictionary) and override ONLY the existing data
 # TODO Warning if multiple Scenes exist
-# TODO Apply Subivision Modifyer before exporting
+
 bl_info = {
-        "name": "Mufflon Exporter",
-		"description": "Exporter for the custom Mufflon file format",
-		"author": "Marvin",
-		"version": (0, 1),
-		"blender": (2, 69, 0),
-		"location": "File > Export > Mufflon (.json/.mff)",
-		"category": "Import-Export"
+    "name": "Mufflon Exporter",
+    "description": "Exporter for the custom Mufflon file format",
+    "author": "Marvin",
+    "version": (1, 0),
+    "blender": (2, 69, 0),
+    "location": "File > Export > Mufflon (.json/.mff)",
+    "category": "Import-Export"
 }
+
 
 def export_json(context, filepath, binfilepath):
     version = "1.0"
@@ -357,7 +358,6 @@ def export_binary(context, filepath):
     binary.extend(flags.to_bytes(4, byteorder='little'))  # has to be corrected when the value is known
 
     currentObjectNumber = 0
-    meshes = bpy.data.meshes
     usedMeshes = []
     mode = context.active_object.mode
     bpy.ops.object.mode_set(mode='EDIT')
@@ -411,7 +411,6 @@ def export_binary(context, filepath):
         if len(currentObject.lod_levels) != 0:  # if it has Lod levels check depth of Lod levels
             lodObject = currentObject.lod_levels[1].object
             maxDistance = -1
-            lastLodChainObject = lodObject
             while lodObject not in lodLevels:
                 lodLevels.append(lodObject)
                 if len(lodObject.lod_levels) == 0:
@@ -421,7 +420,6 @@ def export_binary(context, filepath):
                     break
                 if maxDistance < lodObject.lod_levels[1].distance:
                     maxDistance = lodObject.lod_levels[1].distance  # the last LOD level has the highest distance
-                    lastLodChainObject = lodObject  # it is not lodObject.lod_levels[1].object because of the specification
                     lodChainStart = len(lodLevels)-1
                 lodObject = lodObject.lod_levels[1].object
         if len(lodLevels) == 0:
@@ -439,7 +437,7 @@ def export_binary(context, filepath):
                 binary[lodStartBinaryPosition + k + j*8] = lodStartPosition[i]
             # Type
             binary.extend("LOD_".encode())
-            mesh = lodObject.to_mesh(scn, True, calc_tessface=False, settings='RENDER')
+            mesh = lodObject.to_mesh(scn, True, calc_tessface=False, settings='RENDER')  # applies all modifiers
             bm = bmesh.new()
             bm.from_mesh(mesh)  # bmesh gives a local editable mesh copy
             faces = bm.faces
@@ -530,16 +528,13 @@ def export_binary(context, filepath):
             # Triangles
             for polygon in mesh.polygons:
                 if len(polygon.vertices) == 3:
-                    binary.extend(polygon.vertices[0].to_bytes(4, byteorder='little'))
-                    binary.extend(polygon.vertices[1].to_bytes(4, byteorder='little'))
-                    binary.extend(polygon.vertices[2].to_bytes(4, byteorder='little'))
+                    for k in range(3):
+                        binary.extend(polygon.vertices[k].to_bytes(4, byteorder='little'))
             # Quads
             for polygon in mesh.polygons:
                 if len(polygon.vertices) == 4:
-                    binary.extend(polygon.vertices[0].to_bytes(4, byteorder='little'))
-                    binary.extend(polygon.vertices[1].to_bytes(4, byteorder='little'))
-                    binary.extend(polygon.vertices[2].to_bytes(4, byteorder='little'))
-                    binary.extend(polygon.vertices[3].to_bytes(4, byteorder='little'))
+                    for k in range(4):
+                        binary.extend(polygon.vertices[k].to_bytes(4, byteorder='little'))
             # Material IDs
             for polygon in mesh.polygons:
                 if len(polygon.vertices) == 3:
@@ -555,14 +550,16 @@ def export_binary(context, filepath):
             bpy.data.meshes.remove(mesh)
     # reset used mode
     bpy.ops.object.mode_set(mode=mode)
-    # TODO Instances
+    # Instances
     instanceStartPosition = len(binary).to_bytes(8, byteorder='little')
     for i in range(8):
         binary[instanceSectionStartBinaryPosition + i] = instanceStartPosition[i]
+    # Type
     binary.extend("Inst".encode())
+    # Number of Instances
     numberOfInstancesBinaryPosition = len(binary)
-    binary.extend((0).to_bytes(4, byteorder='little'))  # TODO has to be corrected later
-
+    binary.extend((0).to_bytes(4, byteorder='little'))  # has to be corrected later
+    numberOfInstances = 0
     for i in range(len(objects)):
         currentObject = objects[i]
         if currentObject.type != "MESH":
@@ -570,13 +567,23 @@ def export_binary(context, filepath):
         if len(currentObject.lod_levels) != 0:  # if object has LOD levels
             if len(currentObject.data.vertices) != 0:  # if it has data ( objects with LOD have no data, but the LODs are objects too and have data skip them)
                 continue
-        for j in range(len(usedMeshes)):
-            if usedMeshes[j] == currentObject.data:
-                binary.extend(j.to_bytes(4, byteorder='little'))  # Object ID
+        if currentObject.data in usedMeshes:
+            index = usedMeshes.index(currentObject.data)
+            binary.extend(index.to_bytes(4, byteorder='little'))  # Object ID
             binary.extend((0xFFFFFFFF).to_bytes(4, byteorder='little'))  # TODO Keyframe
             binary.extend((0xFFFFFFFF).to_bytes(4, byteorder='little'))  # TODO Instance ID
-            # TODO 3x4 transformation matrix
-
+            transformMat = currentObject.matrix_world
+            for k in range(4):
+                binary.extend(struct.pack('<f', transformMat[0][k]))
+            for k in range(4):
+                binary.extend(struct.pack('<f', transformMat[2][k]))
+            for k in range(4):
+                binary.extend(struct.pack('<f', transformMat[1][k]))
+            numberOfInstances += 1
+    numberOfInstancesBytes = numberOfInstances.to_bytes(4, byteorder='little')
+    for i in range(4):
+        binary[numberOfInstancesBinaryPosition + i] = numberOfInstancesBytes[i]
+    # Write binary to file
     binFile = open(filepath, 'bw')
     binFile.write(binary)
     binFile.close()
