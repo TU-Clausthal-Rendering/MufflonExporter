@@ -28,7 +28,7 @@ def export_json(context, filepath, binfilepath):
     binary = os.path.relpath(binfilepath, os.path.commonpath([filepath, binfilepath]))
 
     scn = context.scene
-
+    oldData = collections.OrderedDict()
     dataDictionary = collections.OrderedDict()
     dataDictionary['version'] = version
     dataDictionary['binary'] = binary
@@ -36,6 +36,18 @@ def export_json(context, filepath, binfilepath):
     dataDictionary['lights'] = collections.OrderedDict()
     dataDictionary['materials'] = collections.OrderedDict()
     dataDictionary['scenarios'] = collections.OrderedDict()
+    if os.path.isfile(filepath):
+        file = open(filepath, 'r')
+        jsonStr = file.read()
+        file.close()
+        print(jsonStr)
+        oldData = json.loads(jsonStr)
+        dataDictionary['cameras'] = oldData['cameras']
+        dataDictionary['lights'] = oldData['lights']
+        dataDictionary['materials'] = oldData['materials']
+        dataDictionary['scenarios'] = oldData['scenarios']
+
+
 
     # Cameras
 
@@ -262,7 +274,8 @@ def export_json(context, filepath, binfilepath):
     dataDictionary['scenarios'][scn.name] = collections.OrderedDict()
     cameraName = ''  # type: str
     if hasattr(scn.camera, 'name'):
-        if scn.camera.type == "PERSP" or scn.camera.type == "ORTHO":
+        print(scn.camera.type)
+        if scn.camera.data.type == "PERSP" or scn.camera.data.type == "ORTHO":
             cameraName = scn.camera.name
         else:
             cameraName = next(iter(dataDictionary['cameras']))  # gets first camera in dataDictionary
@@ -285,7 +298,7 @@ def export_json(context, filepath, binfilepath):
     dataDictionary['scenarios'][scn.name]['materialAssignments'] = collections.OrderedDict()
 
     for material in materials:
-        dataDictionary['scenarios'][scn.name]['materialAssignments'][material.name] = material.name
+        dataDictionary['scenarios'][scn.name]['materialAssignments'][material.name] = material.name  # TODO fetch some from old Json
 
     dataDictionary['scenarios'][scn.name]['objectProperties'] = collections.OrderedDict()
     # TODO objectProperties
@@ -362,8 +375,7 @@ def export_binary(context, filepath):
 
     currentObjectNumber = 0
     usedMeshes = []
-    mode = context.active_object.mode
-    bpy.ops.object.mode_set(mode='EDIT')
+    activeObject = scn.objects.active
     for i in range(len(objects)):
         currentObject = objects[i]
         if currentObject.type != "MESH":
@@ -445,6 +457,9 @@ def export_binary(context, filepath):
                 binary[lodStartBinaryPosition + k + j*8] = lodStartPosition[k]
             # Type
             binary.extend("LOD_".encode())
+            scn.objects.active = lodObject
+            mode = context.active_object.mode
+            bpy.ops.object.mode_set(mode='EDIT')
             mesh = lodObject.to_mesh(scn, True, calc_tessface=False, settings='RENDER')  # applies all modifiers
             bm = bmesh.new()
             bm.from_mesh(mesh)  # bmesh gives a local editable mesh copy
@@ -580,8 +595,10 @@ def export_binary(context, filepath):
             # TODO Spheres (with deflation)
 
             bpy.data.meshes.remove(mesh)
-    # reset used mode
-    bpy.ops.object.mode_set(mode=mode)
+            # reset used mode
+            bpy.ops.object.mode_set(mode=mode)
+    #reset active object
+    scn.objects.active = activeObject
     # Instances
     instanceStartPosition = len(binary).to_bytes(8, byteorder='little')
     for i in range(8):
