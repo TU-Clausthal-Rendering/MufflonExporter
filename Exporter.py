@@ -377,6 +377,8 @@ def export_binary(context, filepath):
             binary[objectStartBinaryPosition[currentObjectNumber]+j] = objectStartPosition[j]
         currentObjectNumber += 1
         # Write the object flags (TODO: compression and deflation)
+        deflation = True
+        compression = True
         binary.extend((0x00000000).to_bytes(4, byteorder='little'))
         # Type check
         binary.extend("Obj_".encode())
@@ -518,9 +520,12 @@ def export_binary(context, filepath):
                 binary.extend(struct.pack('<f', coordinates[2]))
                 binary.extend(struct.pack('<f', coordinates[1]))
                 normal = vertex.normal
-                binary.extend(struct.pack('<f', normal[0]))
-                binary.extend(struct.pack('<f', normal[2]))
-                binary.extend(struct.pack('<f', normal[1]))
+                if compression:
+                    binary.extend(pack_normal32(normal).to_bytes(4, byteorder='little'))
+                else:
+                    binary.extend(struct.pack('<f', normal[0]))
+                    binary.extend(struct.pack('<f', normal[2]))
+                    binary.extend(struct.pack('<f', normal[1]))
                 # uv
                 binary.extend(struct.pack('<f', uvCoordinates[k][0]))
                 binary.extend(struct.pack('<f', uvCoordinates[k][1]))
@@ -598,6 +603,17 @@ def export_mufflon(context, filepath):
     export_binary(context, binfilepath)
     return {'FINISHED'}
 
+def pack_normal32(vec3):
+    l1norm = abs(vec3[0]) + abs(vec3[2]) + abs(vec3[1])
+    if vec3[1] >= 0:
+        u = vec3[0] / l1norm
+        v = vec3[2] / l1norm
+    else:  # warp lower hemisphere
+        u = (1 - abs(vec3[2]) / l1norm) * (1 if vec3[0] >= 0 else -1)
+        v = (1 - abs(vec3[0]) / l1norm) * (1 if vec3[2] >= 0 else -1)
+    u = math.floor((u / 2 + 0.5) * 65535.49 + 0.5)  # from [-1,1] to [0,2^16-1]
+    v = math.floor((v / 2 + 0.5) * 65535.49 + 0.5)  # from [-1,1] to [0,2^16-1]
+    return u | (v << 16)
 
 # ExportHelper is a helper class, defines filename and
 # invoke() function which calls the file selector.
