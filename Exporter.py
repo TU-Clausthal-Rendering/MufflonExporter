@@ -5,29 +5,30 @@ import os
 import json
 import collections
 import struct
-import datetime
 import numpy
 import math
+import zlib
 
 # TODO Load old json (as dictionary) and override ONLY the existing data
 # TODO Warning if multiple Scenes exist
-# TODO Apply Subivision Modifyer before exporting
+
 bl_info = {
-        "name": "Mufflon Exporter",
-		"description": "Exporter for the custom Mufflon file format",
-		"author": "Marvin",
-		"version": (0, 1),
-		"blender": (2, 69, 0),
-		"location": "File > Export > Mufflon (.json/.mff)",
-		"category": "Import-Export"
+    "name": "Mufflon Exporter",
+    "description": "Exporter for the custom Mufflon file format",
+    "author": "Marvin",
+    "version": (1, 0),
+    "blender": (2, 69, 0),
+    "location": "File > Export > Mufflon (.json/.mff)",
+    "category": "Import-Export"
 }
+
 
 def export_json(context, filepath, binfilepath):
     version = "1.0"
     binary = os.path.relpath(binfilepath, os.path.commonpath([filepath, binfilepath]))
 
     scn = context.scene
-
+    oldData = collections.OrderedDict()
     dataDictionary = collections.OrderedDict()
     dataDictionary['version'] = version
     dataDictionary['binary'] = binary
@@ -35,6 +36,18 @@ def export_json(context, filepath, binfilepath):
     dataDictionary['lights'] = collections.OrderedDict()
     dataDictionary['materials'] = collections.OrderedDict()
     dataDictionary['scenarios'] = collections.OrderedDict()
+    if os.path.isfile(filepath):
+        file = open(filepath, 'r')
+        jsonStr = file.read()
+        file.close()
+        print(jsonStr)
+        oldData = json.loads(jsonStr)
+        dataDictionary['cameras'] = oldData['cameras']
+        dataDictionary['lights'] = oldData['lights']
+        dataDictionary['materials'] = oldData['materials']
+        dataDictionary['scenarios'] = oldData['scenarios']
+
+
 
     # Cameras
 
@@ -68,7 +81,7 @@ def export_json(context, filepath, binfilepath):
             orthoHeight = scn.render.resolution_y / scn.render.resolution_x * orthoWidth  # get aspect ratio via resolution
             dataDictionary['cameras'][camera.name]['height'] = orthoHeight
         else:
-            print("Skipping unsupported camera type: \"%s\" from: \"%s\"" % camera.type, camera.name)
+            print("Warning: Skipping unsupported camera type: \"%s\" from: \"%s\"" % camera.type, camera.name)
             continue
         cameraPath = []
         viewDirectionPath = []
@@ -93,7 +106,7 @@ def export_json(context, filepath, binfilepath):
         dataDictionary['cameras'][camera.name]['up'] = upPath
 
     if len(dataDictionary['cameras']) == 0:
-        print("Stopped exporting: No camera found")  # Stop if no camera was exported
+        print("Error: No camera found")  # Stop if no camera was exported
         return -1
 
     # Lights
@@ -130,7 +143,7 @@ def export_json(context, filepath, binfilepath):
             dataDictionary['lights'][lamp.name]['width'] = lamp.spot_size / 2
             dataDictionary['lights'][lamp.name]['falloffStart'] = lamp.spot_size / 2
         else:
-            print("Skipping unsupported lamp type: \"%s\" from: \"%s\"" % lamp.type, lamp.name)
+            print("Warning: Skipping unsupported lamp type: \"%s\" from: \"%s\"" % lamp.type, lamp.name)
             continue
         # TODO envmap, goniometric
 
@@ -145,6 +158,7 @@ def export_json(context, filepath, binfilepath):
         workDictionary = {}
         ignoreDiffuse = True
         ignoreSpecular = True
+        addedLayer = False
         if material.diffuse_shader == "LAMBERT" or material.diffuse_shader == "OREN_NAYAR" or material.diffuse_shader == "FRESNEL":
             if material.diffuse_intensity != 0:  # ignore if factor == 0
                 layerCount += 1
@@ -167,7 +181,11 @@ def export_json(context, filepath, binfilepath):
             dataDictionary['materials'][material.name]['layerB'] = collections.OrderedDict()
             workDictionary = dataDictionary['materials'][material.name]['layerA']
         else:
-            print("Skipping unsupported material:\"%s\"" % material.name)
+            print("Warning: Initialised unsupported material: \"%s\" as lambert material." % material.name)
+            materialType = "lambert"
+            dataDictionary['materials'][material.name] = collections.OrderedDict()
+            dataDictionary['materials'][material.name]['type'] = materialType
+            dataDictionary['materials'][material.name]['albedo'] = ([material.diffuse_color.r, material.diffuse_color.g, material.diffuse_color.b])
             continue
         currentLayer = 0
         if material.emit != 0:
@@ -189,7 +207,6 @@ def export_json(context, filepath, binfilepath):
                     workDictionary['layerB'] = collections.OrderedDict()
                     workDictionary = workDictionary['layerA']
         if not ignoreDiffuse:
-            addedLayer = False
             if material.diffuse_shader == "LAMBERT":
                 materialType = "lambert"
                 workDictionary['type'] = materialType
@@ -230,13 +247,11 @@ def export_json(context, filepath, binfilepath):
                 workDictionary['type'] = materialType
                 workDictionary['albedo'] = ([material.specular_color.r, material.specular_color.g, material.specular_color.b])
                 workDictionary['roughness'] = material.specular_hardness / 511  # Max hardness = 511
-                workDictionary['ndf'] = "BS" # Default normal distribution function TODO: custom property
+                workDictionary['ndf'] = "BS"  # Default normal distribution function TODO: custom property
                 currentLayer += 1
                 addedLayer = True
             if layerCount != 1:  # if blend Material
                 if addedLayer:
-                    addedLayer = False
-                    factorName = ""
                     if layerCount - currentLayer == 0:  # check if current layer was A or B
                         factorName = "factorB"
                     else:
@@ -259,7 +274,8 @@ def export_json(context, filepath, binfilepath):
     dataDictionary['scenarios'][scn.name] = collections.OrderedDict()
     cameraName = ''  # type: str
     if hasattr(scn.camera, 'name'):
-        if scn.camera.type == "PERSP" or scn.camera.type == "ORTHO":
+        print(scn.camera.type)
+        if scn.camera.data.type == "PERSP" or scn.camera.data.type == "ORTHO":
             cameraName = scn.camera.name
         else:
             cameraName = next(iter(dataDictionary['cameras']))  # gets first camera in dataDictionary
@@ -282,7 +298,7 @@ def export_json(context, filepath, binfilepath):
     dataDictionary['scenarios'][scn.name]['materialAssignments'] = collections.OrderedDict()
 
     for material in materials:
-        dataDictionary['scenarios'][scn.name]['materialAssignments'][material.name] = material.name
+        dataDictionary['scenarios'][scn.name]['materialAssignments'][material.name] = material.name  # TODO fetch some from old Json
 
     dataDictionary['scenarios'][scn.name]['objectProperties'] = collections.OrderedDict()
     # TODO objectProperties
@@ -340,7 +356,12 @@ def export_binary(context, filepath):
     binary.extend((0).to_bytes(8, byteorder='little'))  # has to be corrected when the value is known
     # Global object flags (compression etc.)
     flags = 0
-    binary.extend(flags.to_bytes(4, byteorder='little'))  # has to be corrected when the value is known
+    deflation = True
+    compression = True
+    flags = 0x0  # TODO read custom compression properties
+    #flags |= 1
+    #flags |= 2
+    binary.extend(flags.to_bytes(4, byteorder='little'))
 	
     countOfObjects = 0
     objects = bpy.data.objects
@@ -358,10 +379,8 @@ def export_binary(context, filepath):
         binary.extend((0).to_bytes(8, byteorder='little'))  # has to be corrected when the value is known
 
     currentObjectNumber = 0
-    meshes = bpy.data.meshes
     usedMeshes = []
-    mode = context.active_object.mode
-    bpy.ops.object.mode_set(mode='EDIT')
+    activeObject = scn.objects.active
     for i in range(len(objects)):
         currentObject = objects[i]
         if currentObject.type != "MESH":
@@ -383,8 +402,9 @@ def export_binary(context, filepath):
         objectNameLength = len(objectName)
         binary.extend(objectNameLength.to_bytes(4, byteorder='little'))
         binary.extend(objectName)
-        # Write the object flags (TODO: compression and deflation)
-        binary.extend((0x00000000).to_bytes(4, byteorder='little'))
+        # Write the object flags (NOT compression/deflation, but rather isEmissive etc)
+        objectFlags = 0
+        binary.extend(objectFlags.to_bytes(4, byteorder='little'))
         # keyframe
         binary.extend((0xFFFFFFFF).to_bytes(4, byteorder='little')) # TODO keyframes
         # OBJID of previous object in animation
@@ -412,7 +432,6 @@ def export_binary(context, filepath):
         if len(currentObject.lod_levels) != 0:  # if it has Lod levels check depth of Lod levels
             lodObject = currentObject.lod_levels[1].object
             maxDistance = -1
-            lastLodChainObject = lodObject
             while lodObject not in lodLevels:
                 lodLevels.append(lodObject)
                 if len(lodObject.lod_levels) == 0:
@@ -422,7 +441,6 @@ def export_binary(context, filepath):
                     break
                 if maxDistance < lodObject.lod_levels[1].distance:
                     maxDistance = lodObject.lod_levels[1].distance  # the last LOD level has the highest distance
-                    lastLodChainObject = lodObject  # it is not lodObject.lod_levels[1].object because of the specification
                     lodChainStart = len(lodLevels)-1
                 lodObject = lodObject.lod_levels[1].object
         if len(lodLevels) == 0:
@@ -440,7 +458,10 @@ def export_binary(context, filepath):
                 binary[lodStartBinaryPosition + k + j*8] = lodStartPosition[k]
             # Type
             binary.extend("LOD_".encode())
-            mesh = lodObject.to_mesh(scn, True, calc_tessface=False, settings='RENDER')
+            scn.objects.active = lodObject
+            mode = context.active_object.mode
+            bpy.ops.object.mode_set(mode='EDIT')
+            mesh = lodObject.to_mesh(scn, True, calc_tessface=False, settings='RENDER')  # applies all modifiers
             bm = bmesh.new()
             bm.from_mesh(mesh)  # bmesh gives a local editable mesh copy
             faces = bm.faces
@@ -513,57 +534,82 @@ def export_binary(context, filepath):
                 for polygon in mesh.polygons:
                     for loop_index in range(polygon.loop_start, polygon.loop_start + polygon.loop_total):
                         uvCoordinates[mesh.loops[loop_index].vertex_index] = uv_layer[loop_index].uv
+            vertexDataArray = bytearray()  # Used for deflation
             for k in range(len(vertices)):
                 vertex = mesh.vertices[k]
                 coordinates = vertex.co
-                binary.extend(struct.pack('<f', coordinates[0]))
-                binary.extend(struct.pack('<f', coordinates[2]))
-                binary.extend(struct.pack('<f', coordinates[1]))
+                vertexDataArray.extend(struct.pack('<f', coordinates[0]))
+                vertexDataArray.extend(struct.pack('<f', coordinates[2]))
+                vertexDataArray.extend(struct.pack('<f', coordinates[1]))
                 normal = vertex.normal
-                binary.extend(struct.pack('<f', normal[0]))
-                binary.extend(struct.pack('<f', normal[2]))
-                binary.extend(struct.pack('<f', normal[1]))
+                if compression:
+                    vertexDataArray.extend(pack_normal32(normal).to_bytes(4, byteorder='little'))
+                else:
+                    vertexDataArray.extend(struct.pack('<f', normal[0]))
+                    vertexDataArray.extend(struct.pack('<f', normal[2]))
+                    vertexDataArray.extend(struct.pack('<f', normal[1]))
                 # uv
-                binary.extend(struct.pack('<f', uvCoordinates[k][0]))
-                binary.extend(struct.pack('<f', uvCoordinates[k][1]))
+                vertexDataArray.extend(struct.pack('<f', uvCoordinates[k][0]))
+                vertexDataArray.extend(struct.pack('<f', uvCoordinates[k][1]))
+            vertexOutData = vertexDataArray
+            if deflation:
+                vertexOutData = zlib.compress(vertexDataArray, 8)
+            binary.extend(vertexOutData)
+
             # Attributes
-            # TODO Attributes
+            # TODO Attributes (with deflation)
             # Triangles
+            triangleDataArray = bytearray()  # Used for deflation
             for polygon in mesh.polygons:
                 if len(polygon.vertices) == 3:
-                    binary.extend(polygon.vertices[0].to_bytes(4, byteorder='little'))
-                    binary.extend(polygon.vertices[1].to_bytes(4, byteorder='little'))
-                    binary.extend(polygon.vertices[2].to_bytes(4, byteorder='little'))
+                    for k in range(3):
+                        triangleDataArray.extend(polygon.vertices[k].to_bytes(4, byteorder='little'))
+            triangleOutData = triangleDataArray
+            if deflation:
+                triangleOutData = zlib.compress(triangleDataArray, 8)
+            binary.extend(triangleOutData)
             # Quads
+            quadDataArray = bytearray()  # Used for deflation
             for polygon in mesh.polygons:
                 if len(polygon.vertices) == 4:
-                    binary.extend(polygon.vertices[0].to_bytes(4, byteorder='little'))
-                    binary.extend(polygon.vertices[1].to_bytes(4, byteorder='little'))
-                    binary.extend(polygon.vertices[2].to_bytes(4, byteorder='little'))
-                    binary.extend(polygon.vertices[3].to_bytes(4, byteorder='little'))
+                    for k in range(4):
+                        quadDataArray.extend(polygon.vertices[k].to_bytes(4, byteorder='little'))
+            quadOutData = quadDataArray
+            if deflation:
+                quadOutData = zlib.compress(quadDataArray, 8)
+            binary.extend(quadOutData)
             # Material IDs
+            matIDDataArray = bytearray()
             for polygon in mesh.polygons:
                 if len(polygon.vertices) == 3:
-                    binary.extend(polygon.material_index.to_bytes(2, byteorder='little'))
+                    matIDDataArray.extend(polygon.material_index.to_bytes(2, byteorder='little'))
             for polygon in mesh.polygons:
                 if len(polygon.vertices) == 4:
-                    binary.extend(polygon.material_index.to_bytes(2, byteorder='little'))
+                    matIDDataArray.extend(polygon.material_index.to_bytes(2, byteorder='little'))
+            matIDOutData = matIDDataArray
+            if deflation:
+                matIDOutData = zlib.compress(matIDDataArray, 8)
+            binary.extend(matIDOutData)
             # Face Attributes
-            # TODO Face Attributes
+            # TODO Face Attributes (with deflation)
             # Spheres
-            # TODO Spheres
+            # TODO Spheres (with deflation)
 
             bpy.data.meshes.remove(mesh)
-    # reset used mode
-    bpy.ops.object.mode_set(mode=mode)
-    # TODO Instances
+            # reset used mode
+            bpy.ops.object.mode_set(mode=mode)
+    #reset active object
+    scn.objects.active = activeObject
+    # Instances
     instanceStartPosition = len(binary).to_bytes(8, byteorder='little')
     for i in range(8):
         binary[instanceSectionStartBinaryPosition + i] = instanceStartPosition[i]
+    # Type
     binary.extend("Inst".encode())
+    # Number of Instances
     numberOfInstancesBinaryPosition = len(binary)
-    binary.extend((0).to_bytes(4, byteorder='little'))  # TODO has to be corrected later
-
+    binary.extend((0).to_bytes(4, byteorder='little'))  # has to be corrected later
+    numberOfInstances = 0
     for i in range(len(objects)):
         currentObject = objects[i]
         if currentObject.type != "MESH":
@@ -571,13 +617,23 @@ def export_binary(context, filepath):
         if len(currentObject.lod_levels) != 0:  # if object has LOD levels
             if len(currentObject.data.vertices) != 0:  # if it has data ( objects with LOD have no data, but the LODs are objects too and have data skip them)
                 continue
-        for j in range(len(usedMeshes)):
-            if usedMeshes[j] == currentObject.data:
-                binary.extend(j.to_bytes(4, byteorder='little'))  # Object ID
+        if currentObject.data in usedMeshes:
+            index = usedMeshes.index(currentObject.data)
+            binary.extend(index.to_bytes(4, byteorder='little'))  # Object ID
             binary.extend((0xFFFFFFFF).to_bytes(4, byteorder='little'))  # TODO Keyframe
             binary.extend((0xFFFFFFFF).to_bytes(4, byteorder='little'))  # TODO Instance ID
-            # TODO 3x4 transformation matrix
-
+            transformMat = currentObject.matrix_world
+            for k in range(4):
+                binary.extend(struct.pack('<f', transformMat[0][k]))
+            for k in range(4):
+                binary.extend(struct.pack('<f', transformMat[2][k]))
+            for k in range(4):
+                binary.extend(struct.pack('<f', transformMat[1][k]))
+            numberOfInstances += 1
+    numberOfInstancesBytes = numberOfInstances.to_bytes(4, byteorder='little')
+    for i in range(4):
+        binary[numberOfInstancesBinaryPosition + i] = numberOfInstancesBytes[i]
+    # Write binary to file
     binFile = open(filepath, 'bw')
     binFile.write(binary)
     binFile.close()
@@ -591,6 +647,17 @@ def export_mufflon(context, filepath):
     export_binary(context, binfilepath)
     return {'FINISHED'}
 
+def pack_normal32(vec3):
+    l1norm = abs(vec3[0]) + abs(vec3[2]) + abs(vec3[1])
+    if vec3[1] >= 0:
+        u = vec3[0] / l1norm
+        v = vec3[2] / l1norm
+    else:  # warp lower hemisphere
+        u = (1 - abs(vec3[2]) / l1norm) * (1 if vec3[0] >= 0 else -1)
+        v = (1 - abs(vec3[0]) / l1norm) * (1 if vec3[2] >= 0 else -1)
+    u = math.floor((u / 2 + 0.5) * 65535.49 + 0.5)  # from [-1,1] to [0,2^16-1]
+    v = math.floor((v / 2 + 0.5) * 65535.49 + 0.5)  # from [-1,1] to [0,2^16-1]
+    return u | (v << 16)
 
 # ExportHelper is a helper class, defines filename and
 # invoke() function which calls the file selector.
