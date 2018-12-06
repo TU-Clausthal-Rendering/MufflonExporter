@@ -272,7 +272,7 @@ def export_json(context, filepath, binfilepath):
         # TODO Other Materials (walter (roughness = 1-material.raytrace_transparency_gloss_factor ))
 
     # Scenarios
-    if len(bpy.data.scenarios) > 1:
+    if len(bpy.data.scenes) > 1:
         print("Warning: multiple scenes found only exporting active scene.")
     if not hasattr(dataDictionary['scenarios'], scn.name):
         dataDictionary['scenarios'][scn.name] = collections.OrderedDict()
