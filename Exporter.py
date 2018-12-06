@@ -8,9 +8,9 @@ import struct
 import numpy
 import math
 import zlib
+from collections import OrderedDict
 
 # TODO Load old json (as dictionary) and override ONLY the existing data
-# TODO Warning if multiple Scenes exist
 
 bl_info = {
     "name": "Mufflon Exporter",
@@ -40,14 +40,11 @@ def export_json(context, filepath, binfilepath):
         file = open(filepath, 'r')
         jsonStr = file.read()
         file.close()
-        print(jsonStr)
-        oldData = json.loads(jsonStr)
+        oldData = json.loads(jsonStr, object_pairs_hook=OrderedDict)  # loads the old json and preserves ordering
         dataDictionary['cameras'] = oldData['cameras']
         dataDictionary['lights'] = oldData['lights']
         dataDictionary['materials'] = oldData['materials']
         dataDictionary['scenarios'] = oldData['scenarios']
-
-
 
     # Cameras
 
@@ -58,30 +55,31 @@ def export_json(context, filepath, binfilepath):
         cameraObject = bpy.data.objects[camera.name]
         if camera.type == "PERSP":
             aperture = camera.gpu_dof.fstop
+            if not hasattr(dataDictionary['cameras'], camera.name):
+                dataDictionary['cameras'][camera.name] = collections.OrderedDict()
             if aperture == 128.0:
                 cameraType = "pinhole"
-                dataDictionary['cameras'][camera.name] = collections.OrderedDict()
                 dataDictionary['cameras'][camera.name]['type'] = cameraType
                 fov = camera.angle * 180 / 3.141592653589793  # convert rad to degree
                 dataDictionary['cameras'][camera.name]['fov'] = fov
             else:
                 cameraType = "focus"
-                dataDictionary['cameras'][camera.name] = collections.OrderedDict()
                 dataDictionary['cameras'][camera.name]['type'] = cameraType
                 dataDictionary['cameras'][camera.name]['focalLength'] = camera.lens
                 dataDictionary['cameras'][camera.name]['chipHeight'] = camera.sensor_height
                 dataDictionary['cameras'][camera.name]['focusDistance'] = camera.dof_distance
                 dataDictionary['cameras'][camera.name]['aperture'] = aperture
         elif camera.type == "ORTHO":
+            if not hasattr(dataDictionary['cameras'], camera.name):
+                dataDictionary['cameras'][camera.name] = collections.OrderedDict()
             cameraType = "ortho"
-            dataDictionary['cameras'][camera.name] = collections.OrderedDict()
             dataDictionary['cameras'][camera.name]['type'] = cameraType
             orthoWidth = camera.ortho_scale
             dataDictionary['cameras'][camera.name]['width'] = orthoWidth
             orthoHeight = scn.render.resolution_y / scn.render.resolution_x * orthoWidth  # get aspect ratio via resolution
             dataDictionary['cameras'][camera.name]['height'] = orthoHeight
         else:
-            print("Warning: Skipping unsupported camera type: \"%s\" from: \"%s\"" % camera.type, camera.name)
+            print("Warning: Skipping unsupported camera type: \"%s\" from: \"%s\"." % camera.type, camera.name)
             continue
         cameraPath = []
         viewDirectionPath = []
@@ -106,7 +104,7 @@ def export_json(context, filepath, binfilepath):
         dataDictionary['cameras'][camera.name]['up'] = upPath
 
     if len(dataDictionary['cameras']) == 0:
-        print("Error: No camera found")  # Stop if no camera was exported
+        print("Error: No camera found.")  # Stop if no camera was exported
         return -1
 
     # Lights
@@ -116,23 +114,26 @@ def export_json(context, filepath, binfilepath):
         lamp = lamps[i]
         lampObject = bpy.data.objects[lamp.name]
         if lamp.type == "POINT":
+            if not hasattr(dataDictionary['lights'], lamp.name):
+                dataDictionary['lights'][lamp.name] = collections.OrderedDict()
             lightType = "point"
-            dataDictionary['lights'][lamp.name] = collections.OrderedDict()
             dataDictionary['lights'][lamp.name]['type'] = lightType
             dataDictionary['lights'][lamp.name]['position'] = [lampObject.location.x, lampObject.location.z, lampObject.location.y]
             dataDictionary['lights'][lamp.name]['intensity'] = [lamp.color.r, lamp.color.g, lamp.color.b]
             dataDictionary['lights'][lamp.name]['scale'] = lamp.energy
         elif lamp.type == "SUN":
+            if not hasattr(dataDictionary['lights'], lamp.name):
+                dataDictionary['lights'][lamp.name] = collections.OrderedDict()
             lightType = "directional"
-            dataDictionary['lights'][lamp.name] = collections.OrderedDict()
             dataDictionary['lights'][lamp.name]['type'] = lightType
             viewDirection = lampObject.matrix_world.to_quaternion() * Vector((0.0, 0.0, -1.0))
             dataDictionary['lights'][lamp.name]['direction'] = [viewDirection.x, viewDirection.z, viewDirection.y]
             dataDictionary['lights'][lamp.name]['radiance'] = [lamp.color.r, lamp.color.g, lamp.color.b]
             dataDictionary['lights'][lamp.name]['scale'] = lamp.energy
         elif lamp.type == "SPOT":
+            if not hasattr(dataDictionary['lights'], lamp.name):
+                dataDictionary['lights'][lamp.name] = collections.OrderedDict()
             lightType = "spot"
-            dataDictionary['lights'][lamp.name] = collections.OrderedDict()
             dataDictionary['lights'][lamp.name]['type'] = lightType
             dataDictionary['lights'][lamp.name]['position'] = [lampObject.location.x, lampObject.location.z, lampObject.location.y]
             lightDirection = lampObject.matrix_world.to_quaternion() * Vector((0.0, 0.0, -1.0))
@@ -143,7 +144,7 @@ def export_json(context, filepath, binfilepath):
             dataDictionary['lights'][lamp.name]['width'] = lamp.spot_size / 2
             dataDictionary['lights'][lamp.name]['falloffStart'] = lamp.spot_size / 2
         else:
-            print("Warning: Skipping unsupported lamp type: \"%s\" from: \"%s\"" % lamp.type, lamp.name)
+            print("Warning: Skipping unsupported lamp type: \"%s\" from: \"%s\"." % lamp.type, lamp.name)
             continue
         # TODO envmap, goniometric
 
@@ -169,13 +170,13 @@ def export_json(context, filepath, binfilepath):
                 ignoreSpecular = False
         if material.emit != 0:
             layerCount += 1
-        if layerCount == 1:
+        if not hasattr(dataDictionary['materials'], material.name):
             dataDictionary['materials'][material.name] = collections.OrderedDict()
+        if layerCount == 1:
             workDictionary = dataDictionary['materials'][material.name]
         elif layerCount > 1:
             materialDepth = 1
             materialType = "blend"
-            dataDictionary['materials'][material.name] = collections.OrderedDict()
             dataDictionary['materials'][material.name]['type'] = materialType
             dataDictionary['materials'][material.name]['layerA'] = collections.OrderedDict()
             dataDictionary['materials'][material.name]['layerB'] = collections.OrderedDict()
@@ -183,7 +184,6 @@ def export_json(context, filepath, binfilepath):
         else:
             print("Warning: Initialised unsupported material: \"%s\" as lambert material." % material.name)
             materialType = "lambert"
-            dataDictionary['materials'][material.name] = collections.OrderedDict()
             dataDictionary['materials'][material.name]['type'] = materialType
             dataDictionary['materials'][material.name]['albedo'] = ([material.diffuse_color.r, material.diffuse_color.g, material.diffuse_color.b])
             continue
@@ -203,8 +203,10 @@ def export_json(context, filepath, binfilepath):
                     materialDepth += 1
                     materialType = "blend"
                     workDictionary['type'] = materialType
-                    workDictionary['layerA'] = collections.OrderedDict()
-                    workDictionary['layerB'] = collections.OrderedDict()
+                    if not hasattr(workDictionary, 'layerA'):
+                        workDictionary['layerA'] = collections.OrderedDict()
+                    if not hasattr(workDictionary, 'layerB'):
+                        workDictionary['layerB'] = collections.OrderedDict()
                     workDictionary = workDictionary['layerA']
         if not ignoreDiffuse:
             if material.diffuse_shader == "LAMBERT":
@@ -265,16 +267,17 @@ def export_json(context, filepath, binfilepath):
                     if layerCount - currentLayer != 0:  # if current layer was A set work dictionary to B
                         workDictionary = workDictionary['layerB']
         if currentLayer != layerCount:
-            print("Error: Expected %d layers but %d were used at material: \"%s\"" % (layerCount,currentLayer ,material.name))
+            print("Error: Expected %d layers but %d were used at material: \"%s\"." % (layerCount,currentLayer ,material.name))
             return -1
         # TODO Other Materials (walter (roughness = 1-material.raytrace_transparency_gloss_factor ))
 
     # Scenarios
-
-    dataDictionary['scenarios'][scn.name] = collections.OrderedDict()
+    if len(bpy.data.scenarios) > 1:
+        print("Warning: multiple scenes found only exporting active scene.")
+    if not hasattr(dataDictionary['scenarios'], scn.name):
+        dataDictionary['scenarios'][scn.name] = collections.OrderedDict()
     cameraName = ''  # type: str
     if hasattr(scn.camera, 'name'):
-        print(scn.camera.type)
         if scn.camera.data.type == "PERSP" or scn.camera.data.type == "ORTHO":
             cameraName = scn.camera.name
         else:
@@ -294,16 +297,16 @@ def export_json(context, filepath, binfilepath):
 
     dataDictionary['scenarios'][scn.name]['lights'] = lights
     dataDictionary['scenarios'][scn.name]['lod'] = 0
-
-    dataDictionary['scenarios'][scn.name]['materialAssignments'] = collections.OrderedDict()
-
+    # Material assignments
+    if not hasattr(dataDictionary['scenarios'][scn.name], 'materialAssignments'):
+        dataDictionary['scenarios'][scn.name]['materialAssignments'] = collections.OrderedDict()
     for material in materials:
         dataDictionary['scenarios'][scn.name]['materialAssignments'][material.name] = material.name  # TODO fetch some from old Json
 
-    dataDictionary['scenarios'][scn.name]['objectProperties'] = collections.OrderedDict()
+    # Object properties
+    if not hasattr(dataDictionary['scenarios'][scn.name], 'objectProperties'):
+        dataDictionary['scenarios'][scn.name]['objectProperties'] = collections.OrderedDict()
     # TODO objectProperties
-
-    print(json.dumps(dataDictionary, indent=4))
 
     file = open(filepath, 'w')
     file.write(json.dumps(dataDictionary, indent=4))
@@ -362,7 +365,7 @@ def export_binary(context, filepath):
     #flags |= 1
     #flags |= 2
     binary.extend(flags.to_bytes(4, byteorder='little'))
-	
+
     countOfObjects = 0
     objects = bpy.data.objects
 
@@ -437,7 +440,7 @@ def export_binary(context, filepath):
                 if len(lodObject.lod_levels) == 0:
                     lodLevels = []
                     lodChainStart = 0
-                    print("Warning: Skipped LOD levels from: \"%s\" because LOD Object: \"%s\" has no successor" % (currentObject.name, lodObject.name))
+                    print("Warning: Skipped LOD levels from: \"%s\" because LOD Object: \"%s\" has no successor." % (currentObject.name, lodObject.name))
                     break
                 if maxDistance < lodObject.lod_levels[1].distance:
                     maxDistance = lodObject.lod_levels[1].distance  # the last LOD level has the highest distance
@@ -470,8 +473,6 @@ def export_binary(context, filepath):
             for k in range(len(faces)):
                 if len(faces[k].edges) > 4:
                     facesToTriangulate.append(faces[k])
-                    print(k)
-
             bmesh.ops.triangulate(bm, faces=facesToTriangulate[:], quad_method=0, ngon_method=0)
             # Split vertices if vertex has multiple uv coordinates (is used in multiple triangles)
             if len(lodObject.data.uv_layers):
@@ -492,7 +493,7 @@ def export_binary(context, filepath):
                 elif numVertices == 4:
                     numberOfQuads += 1
                 else:
-                    print("Error: %d Vertices in face from object: %s" % (numVertices, lodObject.name))
+                    print("Error: %d Vertices in face from object: \"%s\"." % (numVertices, lodObject.name))
                     return
             bm.to_mesh(mesh)
             bm.free()
@@ -524,7 +525,7 @@ def export_binary(context, filepath):
             mesh.calc_normals()
             uvCoordinates = numpy.empty(len(vertices), dtype=object)
             if len(mesh.uv_layers) == 0:
-                print("Warning: LOD Object: \"%s\" has no uv layers" % (lodObject.name))
+                print("Warning: LOD Object: \"%s\" has no uv layers." % (lodObject.name))
                 for k in range(len(uvCoordinates)):
                     acos = math.acos(vertices[k].co[1]/(math.sqrt((vertices[k].co[0]*vertices[k].co[0]) + (vertices[k].co[1]*vertices[k].co[1]) + (vertices[k].co[2]*vertices[k].co[2]))))
                     arctan2 = numpy.arctan2(vertices[k].co[2], vertices[k].co[0])
