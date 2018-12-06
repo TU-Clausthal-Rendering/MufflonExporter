@@ -338,7 +338,10 @@ def export_binary(context, filepath):
     instanceSectionStartBinaryPosition = len(binary)  # Save Position in binary has to be corrected later
     # Next section start position
     binary.extend((0).to_bytes(8, byteorder='little'))  # has to be corrected when the value is known
-
+    # Global object flags (compression etc.)
+    flags = 0
+    binary.extend(flags.to_bytes(4, byteorder='little'))  # has to be corrected when the value is known
+	
     countOfObjects = 0
     objects = bpy.data.objects
 
@@ -353,9 +356,6 @@ def export_binary(context, filepath):
     for i in range(countOfObjects):
         objectStartBinaryPosition.append(len(binary))
         binary.extend((0).to_bytes(8, byteorder='little'))  # has to be corrected when the value is known
-
-    flags = 0
-    binary.extend(flags.to_bytes(4, byteorder='little'))  # has to be corrected when the value is known
 
     currentObjectNumber = 0
     meshes = bpy.data.meshes
@@ -372,12 +372,10 @@ def export_binary(context, filepath):
             if len(currentObject.data.vertices) != 0:  # if it has data ( objects with LOD have no data, but the LODs are objects too and have data skip them)
                 continue
         usedMeshes.append(currentObject.data)
-        objectStartPosition = len(binary).to_bytes(4, byteorder='little')
-        for j in range(4):
+        objectStartPosition = len(binary).to_bytes(8, byteorder='little')
+        for j in range(8):
             binary[objectStartBinaryPosition[currentObjectNumber]+j] = objectStartPosition[j]
         currentObjectNumber += 1
-        # Write the object flags (TODO: compression and deflation)
-        binary.extend((0x00000000).to_bytes(4, byteorder='little'))
         # Type check
         binary.extend("Obj_".encode())
         # Object name
@@ -385,6 +383,8 @@ def export_binary(context, filepath):
         objectNameLength = len(objectName)
         binary.extend(objectNameLength.to_bytes(4, byteorder='little'))
         binary.extend(objectName)
+        # Write the object flags (TODO: compression and deflation)
+        binary.extend((0x00000000).to_bytes(4, byteorder='little'))
         # keyframe
         binary.extend((0xFFFFFFFF).to_bytes(4, byteorder='little')) # TODO keyframes
         # OBJID of previous object in animation
