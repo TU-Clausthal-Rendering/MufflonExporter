@@ -10,8 +10,6 @@ import math
 import zlib
 from collections import OrderedDict
 
-# TODO Load old json (as dictionary) and override ONLY the existing data
-
 bl_info = {
     "name": "Mufflon Exporter",
     "description": "Exporter for the custom Mufflon file format",
@@ -378,7 +376,7 @@ def export_json(context, filepath, binfilepath):
     if 'materialAssignments' not in dataDictionary['scenarios'][scn.name]:
         dataDictionary['scenarios'][scn.name]['materialAssignments'] = collections.OrderedDict()
     for material in materials:
-        dataDictionary['scenarios'][scn.name]['materialAssignments'][material.name] = material.name  # TODO fetch some from old Json
+        dataDictionary['scenarios'][scn.name]['materialAssignments'][material.name] = material.name
 
     # Object properties
     if 'objectProperties' not in dataDictionary['scenarios'][scn.name]:
