@@ -45,6 +45,7 @@ def export_json(context, filepath, binfilepath):
         dataDictionary['lights'] = oldData['lights']
         dataDictionary['materials'] = oldData['materials']
         dataDictionary['scenarios'] = oldData['scenarios']
+        print(dataDictionary['materials']['Material']['layerA']['radiance'])
 
     # Cameras
 
@@ -55,7 +56,7 @@ def export_json(context, filepath, binfilepath):
         cameraObject = bpy.data.objects[camera.name]
         if camera.type == "PERSP":
             aperture = camera.gpu_dof.fstop
-            if not hasattr(dataDictionary['cameras'], camera.name):
+            if camera.name not in dataDictionary['cameras']:
                 dataDictionary['cameras'][camera.name] = collections.OrderedDict()
             if aperture == 128.0:
                 cameraType = "pinhole"
@@ -70,7 +71,7 @@ def export_json(context, filepath, binfilepath):
                 dataDictionary['cameras'][camera.name]['focusDistance'] = camera.dof_distance
                 dataDictionary['cameras'][camera.name]['aperture'] = aperture
         elif camera.type == "ORTHO":
-            if not hasattr(dataDictionary['cameras'], camera.name):
+            if camera.name not in dataDictionary['cameras']:
                 dataDictionary['cameras'][camera.name] = collections.OrderedDict()
             cameraType = "ortho"
             dataDictionary['cameras'][camera.name]['type'] = cameraType
@@ -114,7 +115,7 @@ def export_json(context, filepath, binfilepath):
         lamp = lamps[i]
         lampObject = bpy.data.objects[lamp.name]
         if lamp.type == "POINT":
-            if not hasattr(dataDictionary['lights'], lamp.name):
+            if lamp.name not in dataDictionary['lights']:
                 dataDictionary['lights'][lamp.name] = collections.OrderedDict()
             lightType = "point"
             dataDictionary['lights'][lamp.name]['type'] = lightType
@@ -122,7 +123,7 @@ def export_json(context, filepath, binfilepath):
             dataDictionary['lights'][lamp.name]['intensity'] = [lamp.color.r, lamp.color.g, lamp.color.b]
             dataDictionary['lights'][lamp.name]['scale'] = lamp.energy
         elif lamp.type == "SUN":
-            if not hasattr(dataDictionary['lights'], lamp.name):
+            if lamp.name not in dataDictionary['lights']:
                 dataDictionary['lights'][lamp.name] = collections.OrderedDict()
             lightType = "directional"
             dataDictionary['lights'][lamp.name]['type'] = lightType
@@ -131,7 +132,7 @@ def export_json(context, filepath, binfilepath):
             dataDictionary['lights'][lamp.name]['radiance'] = [lamp.color.r, lamp.color.g, lamp.color.b]
             dataDictionary['lights'][lamp.name]['scale'] = lamp.energy
         elif lamp.type == "SPOT":
-            if not hasattr(dataDictionary['lights'], lamp.name):
+            if lamp.name not in dataDictionary['lights']:
                 dataDictionary['lights'][lamp.name] = collections.OrderedDict()
             lightType = "spot"
             dataDictionary['lights'][lamp.name]['type'] = lightType
@@ -159,18 +160,59 @@ def export_json(context, filepath, binfilepath):
         workDictionary = {}
         ignoreDiffuse = True
         ignoreSpecular = True
+        unsupportedDiffuse = False
         addedLayer = False
+        textureSlots = material.texture_slots
+        textureMap = {}
+        for j in range(len(textureSlots)):
+            if not material.use_textures[j]:
+                continue
+            textureSlot = textureSlots[j]
+            if textureSlot is None:
+                continue
+            if textureSlot.texture.type != "IMAGE":
+                continue
+            if textureSlot.use_map_color_diffuse:
+                if 'diffuse' in textureMap:
+                    print("Warning: Too many diffuse textures: \"%s\",\"%s\" from material: \"%s\"." % (textureSlots[textureMap['diffuse']].name, textureSlot.name, material.name))
+                else:
+                    textureMap['diffuse'] = j
+            if textureSlot.use_map_color_spec:
+                if 'specular' in textureMap:
+                    print("Warning: Too many specular textures: \"%s\",\"%s\" from material: \"%s\"." % (textureSlots[textureMap['specular']].name, textureSlot.name, material.name))
+                else:
+                    textureMap['specular'] = j
+            if textureSlot.use_map_emit:
+                if 'emissive' in textureMap:
+                    print("Warning: Too many emissive textures: \"%s\",\"%s\" from material: \"%s\"." % (textureSlots[textureMap['emissive']].name, textureSlot.name, material.name))
+                else:
+                    textureMap['emissive'] = j
+            if textureSlot.use_map_hardness:
+                if 'roughness' in textureMap:
+                    print("Warning: Too many roughness textures: \"%s\",\"%s\" from material: \"%s\"." % (textureSlots[textureMap['roughness']].name, textureSlot.name, material.name))
+                else:
+                    textureMap['roughness'] = j
         if material.diffuse_shader == "LAMBERT" or material.diffuse_shader == "OREN_NAYAR" or material.diffuse_shader == "FRESNEL":
-            if material.diffuse_intensity != 0:  # ignore if factor == 0
+            if material.diffuse_intensity != 0 or 'diffuse' in textureMap:  # ignore if factor == 0 and no Texture
                 layerCount += 1
                 ignoreDiffuse = False
+        elif 'diffuse' in textureMap:
+            print("Warning: Initialised diffuse Texture: \"%s\" from unsupported diffuse material: \"%s\" as Lambert material." % textureSlots[textureMap['diffuse']].name, material.name)
+            layerCount += 1
+            ignoreDiffuse = False
+            unsupportedDiffuse = True
         if material.specular_shader == "COOKTORR":
-            if material.specular_intensity != 0:  # ignore if factor == 0
+            if material.specular_intensity != 0 or 'specular' in textureMap:  # ignore if factor == 0 and no Texture
                 layerCount += 1
                 ignoreSpecular = False
+        else:
+            if 'specular' in textureMap:
+                print("Warning: Ignored specular Texture: \"%s\" from unsupported specular material: \"%s\"." % textureSlots[textureMap['specular']].name, material.name)
+            if 'roughness' in textureMap:
+                print("Warning: Ignored roughness Texture: \"%s\" from unsupported specular material: \"%s\"." % textureSlots[textureMap['roughness']].name, material.name)
         if material.emit != 0:
             layerCount += 1
-        if not hasattr(dataDictionary['materials'], material.name):
+        if material.name not in dataDictionary['materials']:
             dataDictionary['materials'][material.name] = collections.OrderedDict()
         if layerCount == 1:
             workDictionary = dataDictionary['materials'][material.name]
@@ -178,8 +220,10 @@ def export_json(context, filepath, binfilepath):
             materialDepth = 1
             materialType = "blend"
             dataDictionary['materials'][material.name]['type'] = materialType
-            dataDictionary['materials'][material.name]['layerA'] = collections.OrderedDict()
-            dataDictionary['materials'][material.name]['layerB'] = collections.OrderedDict()
+            if 'layerA' not in dataDictionary['materials'][material.name]:
+                dataDictionary['materials'][material.name]['layerA'] = collections.OrderedDict()
+            if 'layerB' not in dataDictionary['materials'][material.name]:
+                dataDictionary['materials'][material.name]['layerB'] = collections.OrderedDict()
             workDictionary = dataDictionary['materials'][material.name]['layerA']
         else:
             print("Warning: Initialised unsupported material: \"%s\" as lambert material." % material.name)
@@ -188,10 +232,18 @@ def export_json(context, filepath, binfilepath):
             dataDictionary['materials'][material.name]['albedo'] = ([material.diffuse_color.r, material.diffuse_color.g, material.diffuse_color.b])
             continue
         currentLayer = 0
+        if material.emit == 0 and 'emissive' in textureMap:
+            print("Warning ignored emissive texture:\"%s\" from material:\"%s\" because emit factor is 0." % (textureSlots[textureMap['emissive']].name, material.name))
         if material.emit != 0:
             materialType = "emissive"
             workDictionary['type'] = materialType
-            workDictionary['radiance'] = ([material.diffuse_color.r, material.diffuse_color.g, material.diffuse_color.b])
+            if 'emissive' in textureMap:
+                absPath = bpy.path.abspath(textureSlots[textureMap['emissive']].texture.image.filepath)
+                finalPath = os.path.relpath(absPath, os.path.dirname(filepath))
+                finalPath = finalPath.replace("\\", "/")
+                workDictionary['radiance'] = finalPath
+            else:
+                workDictionary['radiance'] = ([material.diffuse_color.r, material.diffuse_color.g, material.diffuse_color.b])
             workDictionary['scale'] = material.emit
             currentLayer += 1
             if layerCount != 1:  # if blend Material
@@ -203,23 +255,35 @@ def export_json(context, filepath, binfilepath):
                     materialDepth += 1
                     materialType = "blend"
                     workDictionary['type'] = materialType
-                    if not hasattr(workDictionary, 'layerA'):
+                    if 'layerA' not in workDictionary:
                         workDictionary['layerA'] = collections.OrderedDict()
-                    if not hasattr(workDictionary, 'layerB'):
+                    if 'layerB' not in workDictionary:
                         workDictionary['layerB'] = collections.OrderedDict()
                     workDictionary = workDictionary['layerA']
         if not ignoreDiffuse:
-            if material.diffuse_shader == "LAMBERT":
+            if material.diffuse_shader == "LAMBERT" or unsupportedDiffuse:
                 materialType = "lambert"
                 workDictionary['type'] = materialType
-                workDictionary['albedo'] = ([material.diffuse_color.r, material.diffuse_color.g, material.diffuse_color.b])
+                if 'diffuse' in textureMap:
+                    absPath = bpy.path.abspath(textureSlots[textureMap['diffuse']].texture.image.filepath)
+                    finalPath = os.path.relpath(absPath, os.path.dirname(filepath))
+                    finalPath = finalPath.replace("\\", "/")
+                    workDictionary['albedo'] = finalPath
+                else:
+                    workDictionary['albedo'] = ([material.diffuse_color.r, material.diffuse_color.g, material.diffuse_color.b])
                 currentLayer += 1
                 addedLayer = True
             elif material.diffuse_shader == "OREN_NAYAR":
                 materialType = "orennayar"
                 workDictionary['type'] = materialType
-                workDictionary['albedo'] = ([material.diffuse_color.r, material.diffuse_color.g, material.diffuse_color.b])
-                workDictionary['roughness'] = material.roughness
+                if 'diffuse' in textureMap:
+                    absPath = bpy.path.abspath(textureSlots[textureMap['diffuse']].texture.image.filepath)
+                    finalPath = os.path.relpath(absPath, os.path.dirname(filepath))
+                    finalPath = finalPath.replace("\\", "/")
+                    workDictionary['albedo'] = finalPath
+                else:
+                    workDictionary['albedo'] = ([material.diffuse_color.r, material.diffuse_color.g, material.diffuse_color.b])
+                workDictionary['roughness'] = material.roughness # blender is from 0 to pi and in the specifications to pi/2 but pi is ok
                 currentLayer += 1
                 addedLayer = True
             elif material.diffuse_shader == "FRESNEL":
@@ -247,8 +311,21 @@ def export_json(context, filepath, binfilepath):
             if material.specular_shader == "COOKTORR":
                 materialType = "torrance"
                 workDictionary['type'] = materialType
-                workDictionary['albedo'] = ([material.specular_color.r, material.specular_color.g, material.specular_color.b])
-                workDictionary['roughness'] = material.specular_hardness / 511  # Max hardness = 511
+                if 'specular' in textureMap:
+                    absPath = bpy.path.abspath(textureSlots[textureMap['specular']].texture.image.filepath)
+                    finalPath = os.path.relpath(absPath, os.path.dirname(filepath))
+                    finalPath = finalPath.replace("\\", "/")
+                    workDictionary['albedo'] = finalPath
+                else:
+                    print("specOld")
+                    workDictionary['albedo'] = ([material.specular_color.r, material.specular_color.g, material.specular_color.b])
+                if 'roughness' in textureMap:
+                    absPath = bpy.path.abspath(textureSlots[textureMap['roughness']].texture.image.filepath)
+                    finalPath = os.path.relpath(absPath, os.path.dirname(filepath))
+                    finalPath = finalPath.replace("\\", "/")
+                    workDictionary['roughness'] = finalPath
+                else:
+                    workDictionary['roughness'] = material.specular_hardness / 511  # Max hardness = 511
                 workDictionary['ndf'] = "BS"  # Default normal distribution function TODO: custom property
                 currentLayer += 1
                 addedLayer = True
@@ -267,17 +344,17 @@ def export_json(context, filepath, binfilepath):
                     if layerCount - currentLayer != 0:  # if current layer was A set work dictionary to B
                         workDictionary = workDictionary['layerB']
         if currentLayer != layerCount:
-            print("Error: Expected %d layers but %d were used at material: \"%s\"." % (layerCount,currentLayer ,material.name))
+            print("Error: Expected %d layers but %d were used at material: \"%s\"." % (layerCount, currentLayer, material.name))
             return -1
         # TODO Other Materials (walter (roughness = 1-material.raytrace_transparency_gloss_factor ))
 
     # Scenarios
     if len(bpy.data.scenes) > 1:
         print("Warning: multiple scenes found only exporting active scene.")
-    if not hasattr(dataDictionary['scenarios'], scn.name):
+    if scn.name not in dataDictionary['scenarios']:
         dataDictionary['scenarios'][scn.name] = collections.OrderedDict()
     cameraName = ''  # type: str
-    if hasattr(scn.camera, 'name'):
+    if 'name' in scn.camera:
         if scn.camera.data.type == "PERSP" or scn.camera.data.type == "ORTHO":
             cameraName = scn.camera.name
         else:
@@ -298,13 +375,13 @@ def export_json(context, filepath, binfilepath):
     dataDictionary['scenarios'][scn.name]['lights'] = lights
     dataDictionary['scenarios'][scn.name]['lod'] = 0
     # Material assignments
-    if not hasattr(dataDictionary['scenarios'][scn.name], 'materialAssignments'):
+    if 'materialAssignments' not in dataDictionary['scenarios'][scn.name]:
         dataDictionary['scenarios'][scn.name]['materialAssignments'] = collections.OrderedDict()
     for material in materials:
         dataDictionary['scenarios'][scn.name]['materialAssignments'][material.name] = material.name  # TODO fetch some from old Json
 
     # Object properties
-    if not hasattr(dataDictionary['scenarios'][scn.name], 'objectProperties'):
+    if 'objectProperties' not in dataDictionary['scenarios'][scn.name]:
         dataDictionary['scenarios'][scn.name]['objectProperties'] = collections.OrderedDict()
     # TODO objectProperties
 
