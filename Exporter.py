@@ -43,7 +43,6 @@ def export_json(context, filepath, binfilepath):
         dataDictionary['lights'] = oldData['lights']
         dataDictionary['materials'] = oldData['materials']
         dataDictionary['scenarios'] = oldData['scenarios']
-        print(dataDictionary['materials']['Material']['layerA']['radiance'])
 
     # Cameras
 
@@ -192,22 +191,25 @@ def export_json(context, filepath, binfilepath):
                     textureMap['roughness'] = j
         if material.diffuse_shader == "LAMBERT" or material.diffuse_shader == "OREN_NAYAR" or material.diffuse_shader == "FRESNEL":
             if material.diffuse_intensity != 0 or 'diffuse' in textureMap:  # ignore if factor == 0 and no Texture
+                if material.diffuse_shader == "FRESNEL":
+                    ignoreSpecular = False
                 layerCount += 1
                 ignoreDiffuse = False
         elif 'diffuse' in textureMap:
-            print("Warning: Initialised diffuse Texture: \"%s\" from unsupported diffuse material: \"%s\" as Lambert material." % textureSlots[textureMap['diffuse']].name, material.name)
+            print("Warning: Initialised diffuse Texture: \"%s\" from unsupported diffuse material: \"%s\" as Lambert material." % (textureSlots[textureMap['diffuse']].name, material.name))
             layerCount += 1
             ignoreDiffuse = False
             unsupportedDiffuse = True
         if material.specular_shader == "COOKTORR":
             if material.specular_intensity != 0 or 'specular' in textureMap:  # ignore if factor == 0 and no Texture
-                layerCount += 1
+                if not material.diffuse_shader == "FRESNEL" or ignoreDiffuse:  # if Fresnel dont add a blend layer
+                    layerCount += 1
                 ignoreSpecular = False
-        else:
+        elif material.diffuse_shader != "FRESNEL":
             if 'specular' in textureMap:
-                print("Warning: Ignored specular Texture: \"%s\" from unsupported specular material: \"%s\"." % textureSlots[textureMap['specular']].name, material.name)
+                print("Warning: Ignored specular Texture: \"%s\" from unsupported specular material: \"%s\"." % (textureSlots[textureMap['specular']].name, material.name))
             if 'roughness' in textureMap:
-                print("Warning: Ignored roughness Texture: \"%s\" from unsupported specular material: \"%s\"." % textureSlots[textureMap['roughness']].name, material.name)
+                print("Warning: Ignored roughness Texture: \"%s\" from unsupported specular material: \"%s\"." % (textureSlots[textureMap['roughness']].name, material.name))
         if material.emit != 0:
             layerCount += 1
         if material.name not in dataDictionary['materials']:
@@ -287,9 +289,22 @@ def export_json(context, filepath, binfilepath):
             elif material.diffuse_shader == "FRESNEL":
                 materialType = "fresnel"
                 workDictionary['type'] = materialType
-                # TODO Finish Fresnel
-                currentLayer += 1
-                addedLayer = True
+                workDictionary['refractionIndex'] = material.diffuse_fresnel
+                if 'layerRefraction' not in workDictionary:
+                    workDictionary['layerRefraction'] = collections.OrderedDict()
+                materialType = "lambert"
+                workDictionary['layerRefraction']['type'] = materialType
+                if 'diffuse' in textureMap:
+                    absPath = bpy.path.abspath(textureSlots[textureMap['diffuse']].texture.image.filepath)
+                    finalPath = os.path.relpath(absPath, os.path.dirname(filepath))
+                    finalPath = finalPath.replace("\\", "/")
+                    workDictionary['layerRefraction']['albedo'] = finalPath
+                else:
+                    workDictionary['layerRefraction']['albedo'] = ([material.diffuse_color.r, material.diffuse_color.g, material.diffuse_color.b])
+                if 'layerReflection' not in workDictionary:
+                    workDictionary['layerReflection'] = collections.OrderedDict()
+                workDictionary = workDictionary['layerReflection']
+                # No currentLayer += 1  and addedLayer = True here because the layer is not finished yet
             if layerCount != 1:  # if blend Material
                 if addedLayer:
                     addedLayer = False
@@ -315,7 +330,6 @@ def export_json(context, filepath, binfilepath):
                     finalPath = finalPath.replace("\\", "/")
                     workDictionary['albedo'] = finalPath
                 else:
-                    print("specOld")
                     workDictionary['albedo'] = ([material.specular_color.r, material.specular_color.g, material.specular_color.b])
                 if 'roughness' in textureMap:
                     absPath = bpy.path.abspath(textureSlots[textureMap['roughness']].texture.image.filepath)
@@ -324,6 +338,27 @@ def export_json(context, filepath, binfilepath):
                     workDictionary['roughness'] = finalPath
                 else:
                     workDictionary['roughness'] = material.specular_hardness / 511  # Max hardness = 511
+                workDictionary['ndf'] = "BS"  # Default normal distribution function TODO: custom property
+                currentLayer += 1
+                addedLayer = True
+            else:  # Else we have Fresnel and we have to use a default torrance
+                materialType = "torrance"
+                workDictionary['type'] = materialType
+                if 'specular' in textureMap:
+                    absPath = bpy.path.abspath(textureSlots[textureMap['specular']].texture.image.filepath)
+                    finalPath = os.path.relpath(absPath, os.path.dirname(filepath))
+                    finalPath = finalPath.replace("\\", "/")
+                    workDictionary['albedo'] = finalPath
+                else:
+                    workDictionary['albedo'] = (
+                    [material.specular_color.r, material.specular_color.g, material.specular_color.b])
+                if 'roughness' in textureMap:
+                    absPath = bpy.path.abspath(textureSlots[textureMap['roughness']].texture.image.filepath)
+                    finalPath = os.path.relpath(absPath, os.path.dirname(filepath))
+                    finalPath = finalPath.replace("\\", "/")
+                    workDictionary['roughness'] = finalPath
+                else:
+                    workDictionary['roughness'] = 0  # We could have no roughness parameter so we default to 0
                 workDictionary['ndf'] = "BS"  # Default normal distribution function TODO: custom property
                 currentLayer += 1
                 addedLayer = True
