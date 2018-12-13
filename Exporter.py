@@ -754,8 +754,15 @@ def export_binary(context, filepath):
 def export_mufflon(context, filepath):
     filename = os.path.splitext(filepath)[0]
     binfilepath = filename + ".mff"
-    export_json(context, filepath, binfilepath)  # TODO Stop when failed (not now for easier testing)
-    export_binary(context, binfilepath)
+    if export_json(context, filepath, binfilepath) == 0:
+        print("Succeeded exporting JSON")
+        if export_binary(context, binfilepath) == 0:
+            print("Succeeded exporting binary")
+        else:
+            print("Failed exporting binary")
+    else:
+        print("Failed exporting JSON")
+        print("Stopped exporting")
     return {'FINISHED'}
 
 def pack_normal32(vec3):
