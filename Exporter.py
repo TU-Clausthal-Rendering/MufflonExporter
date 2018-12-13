@@ -159,6 +159,7 @@ def export_json(context, filepath, binfilepath):
         ignoreSpecular = True
         unsupportedDiffuse = False
         addedLayer = False
+        useWalter = False
         textureSlots = material.texture_slots
         textureMap = {}
         for j in range(len(textureSlots)):
@@ -189,7 +190,9 @@ def export_json(context, filepath, binfilepath):
                     print("Warning: Too many roughness textures: \"%s\",\"%s\" from material: \"%s\"." % (textureSlots[textureMap['roughness']].name, textureSlot.name, material.name))
                 else:
                     textureMap['roughness'] = j
-        if material.diffuse_shader == "LAMBERT" or material.diffuse_shader == "OREN_NAYAR" or material.diffuse_shader == "FRESNEL":
+        if material.use_transparency:
+            useWalter = True
+        if material.diffuse_shader == "LAMBERT" or material.diffuse_shader == "OREN_NAYAR" or material.diffuse_shader == "FRESNEL" or useWalter:
             if material.diffuse_intensity != 0 or 'diffuse' in textureMap:  # ignore if factor == 0 and no Texture
                 if material.diffuse_shader == "FRESNEL":
                     ignoreSpecular = False
@@ -261,7 +264,22 @@ def export_json(context, filepath, binfilepath):
                         workDictionary['layerB'] = collections.OrderedDict()
                     workDictionary = workDictionary['layerA']
         if not ignoreDiffuse:
-            if material.diffuse_shader == "LAMBERT" or unsupportedDiffuse:
+            if useWalter and material.diffuse_shader != "FRESNEL":  # if Fresnel do a fresnel material otherwise walter
+                materialType = "walter"
+                workDictionary['type'] = materialType
+                if 'roughness' in textureMap:
+                    absPath = bpy.path.abspath(textureSlots[textureMap['roughness']].texture.image.filepath)
+                    finalPath = os.path.relpath(absPath, os.path.dirname(filepath))
+                    finalPath = finalPath.replace("\\", "/")
+                    workDictionary['roughness'] = finalPath
+                else:
+                    workDictionary['roughness'] = (1 - material.specular_alpha)
+                workDictionary['ndf'] = "BS"  # Default normal distribution function TODO: custom property
+                absorptionFactor = material.alpha
+                workDictionary['absorption'] = ([material.diffuse_color.r * absorptionFactor, material.diffuse_color.g * absorptionFactor, material.diffuse_color.b * absorptionFactor])
+                currentLayer += 1
+                addedLayer = True
+            elif material.diffuse_shader == "LAMBERT" or unsupportedDiffuse:
                 materialType = "lambert"
                 workDictionary['type'] = materialType
                 if 'diffuse' in textureMap:
@@ -292,15 +310,29 @@ def export_json(context, filepath, binfilepath):
                 workDictionary['refractionIndex'] = material.diffuse_fresnel
                 if 'layerRefraction' not in workDictionary:
                     workDictionary['layerRefraction'] = collections.OrderedDict()
-                materialType = "lambert"
-                workDictionary['layerRefraction']['type'] = materialType
-                if 'diffuse' in textureMap:
-                    absPath = bpy.path.abspath(textureSlots[textureMap['diffuse']].texture.image.filepath)
-                    finalPath = os.path.relpath(absPath, os.path.dirname(filepath))
-                    finalPath = finalPath.replace("\\", "/")
-                    workDictionary['layerRefraction']['albedo'] = finalPath
+                if useWalter:
+                    materialType = "walter"
+                    workDictionary['layerRefraction']['type'] = materialType
+                    if 'roughness' in textureMap:
+                        absPath = bpy.path.abspath(textureSlots[textureMap['roughness']].texture.image.filepath)
+                        finalPath = os.path.relpath(absPath, os.path.dirname(filepath))
+                        finalPath = finalPath.replace("\\", "/")
+                        workDictionary['layerRefraction']['roughness'] = finalPath
+                    else:
+                        workDictionary['layerRefraction']['roughness'] = (1 - material.specular_alpha)
+                    workDictionary['layerRefraction']['ndf'] = "BS"  # Default normal distribution function TODO: custom property
+                    absorptionFactor = material.alpha
+                    workDictionary['layerRefraction']['absorption'] = ([material.diffuse_color.r*absorptionFactor, material.diffuse_color.g*absorptionFactor, material.diffuse_color.b*absorptionFactor])
                 else:
-                    workDictionary['layerRefraction']['albedo'] = ([material.diffuse_color.r, material.diffuse_color.g, material.diffuse_color.b])
+                    materialType = "lambert"
+                    workDictionary['layerRefraction']['type'] = materialType
+                    if 'diffuse' in textureMap:
+                        absPath = bpy.path.abspath(textureSlots[textureMap['diffuse']].texture.image.filepath)
+                        finalPath = os.path.relpath(absPath, os.path.dirname(filepath))
+                        finalPath = finalPath.replace("\\", "/")
+                        workDictionary['layerRefraction']['albedo'] = finalPath
+                    else:
+                        workDictionary['layerRefraction']['albedo'] = ([material.diffuse_color.r, material.diffuse_color.g, material.diffuse_color.b])
                 if 'layerReflection' not in workDictionary:
                     workDictionary['layerReflection'] = collections.OrderedDict()
                 workDictionary = workDictionary['layerReflection']
@@ -350,8 +382,7 @@ def export_json(context, filepath, binfilepath):
                     finalPath = finalPath.replace("\\", "/")
                     workDictionary['albedo'] = finalPath
                 else:
-                    workDictionary['albedo'] = (
-                    [material.specular_color.r, material.specular_color.g, material.specular_color.b])
+                    workDictionary['albedo'] = ([material.specular_color.r, material.specular_color.g, material.specular_color.b])
                 if 'roughness' in textureMap:
                     absPath = bpy.path.abspath(textureSlots[textureMap['roughness']].texture.image.filepath)
                     finalPath = os.path.relpath(absPath, os.path.dirname(filepath))
@@ -379,7 +410,6 @@ def export_json(context, filepath, binfilepath):
         if currentLayer != layerCount:
             print("Error: Expected %d layers but %d were used at material: \"%s\"." % (layerCount, currentLayer, material.name))
             return -1
-        # TODO Other Materials (walter (roughness = 1-material.raytrace_transparency_gloss_factor ))
 
     # Scenarios
     if len(bpy.data.scenes) > 1:
