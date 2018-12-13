@@ -454,7 +454,7 @@ def export_json(context, filepath, binfilepath):
     return 0
 
 
-def export_binary(context, filepath):
+def export_binary(context, filepath, use_selection, use_deflation, use_compression):
     scn = context.scene
     # Binary
     binary = bytearray()
@@ -498,12 +498,11 @@ def export_binary(context, filepath):
     # Next section start position
     binary.extend((0).to_bytes(8, byteorder='little'))  # has to be corrected when the value is known
     # Global object flags (compression etc.)
-    flags = 0
-    deflation = True
-    compression = True
     flags = 0x0  # TODO read custom compression properties
-    #flags |= 1
-    #flags |= 2
+    if use_deflation:
+        flags |= 1
+    if use_compression:
+        flags |= 2
     binary.extend(flags.to_bytes(4, byteorder='little'))
 
     countOfObjects = 0
@@ -683,7 +682,7 @@ def export_binary(context, filepath):
                 vertexDataArray.extend(struct.pack('<f', coordinates[2]))
                 vertexDataArray.extend(struct.pack('<f', coordinates[1]))
                 normal = vertex.normal
-                if compression:
+                if use_compression:
                     vertexDataArray.extend(pack_normal32(normal).to_bytes(4, byteorder='little'))
                 else:
                     vertexDataArray.extend(struct.pack('<f', normal[0]))
@@ -693,8 +692,10 @@ def export_binary(context, filepath):
                 vertexDataArray.extend(struct.pack('<f', uvCoordinates[k][0]))
                 vertexDataArray.extend(struct.pack('<f', uvCoordinates[k][1]))
             vertexOutData = vertexDataArray
-            if deflation:
+            if use_deflation and len(vertexDataArray) > 0:
                 vertexOutData = zlib.compress(vertexDataArray, 8)
+                binary.extend(len(vertexOutData).to_bytes(4, byteorder='little'))
+                binary.extend(len(vertexDataArray).to_bytes(4, byteorder='little'))
             binary.extend(vertexOutData)
 
             # Attributes
@@ -706,8 +707,10 @@ def export_binary(context, filepath):
                     for k in range(3):
                         triangleDataArray.extend(polygon.vertices[k].to_bytes(4, byteorder='little'))
             triangleOutData = triangleDataArray
-            if deflation:
+            if use_deflation and len(triangleDataArray) > 0:
                 triangleOutData = zlib.compress(triangleDataArray, 8)
+                binary.extend(len(triangleOutData).to_bytes(4, byteorder='little'))
+                binary.extend(len(triangleDataArray).to_bytes(4, byteorder='little'))
             binary.extend(triangleOutData)
             # Quads
             quadDataArray = bytearray()  # Used for deflation
@@ -716,8 +719,10 @@ def export_binary(context, filepath):
                     for k in range(4):
                         quadDataArray.extend(polygon.vertices[k].to_bytes(4, byteorder='little'))
             quadOutData = quadDataArray
-            if deflation:
+            if use_deflation and len(quadDataArray) > 0:
                 quadOutData = zlib.compress(quadDataArray, 8)
+                binary.extend(len(quadOutData).to_bytes(4, byteorder='little'))
+                binary.extend(len(quadDataArray).to_bytes(4, byteorder='little'))
             binary.extend(quadOutData)
             # Material IDs
             matIDDataArray = bytearray()
@@ -728,8 +733,10 @@ def export_binary(context, filepath):
                 if len(polygon.vertices) == 4:
                     matIDDataArray.extend(polygon.material_index.to_bytes(2, byteorder='little'))
             matIDOutData = matIDDataArray
-            if deflation:
+            if use_deflation and len(matIDDataArray) > 0:
                 matIDOutData = zlib.compress(matIDDataArray, 8)
+                binary.extend(len(matIDOutData).to_bytes(4, byteorder='little'))
+                binary.extend(len(matIDDataArray).to_bytes(4, byteorder='little'))
             binary.extend(matIDOutData)
             # Face Attributes
             # TODO Face Attributes (with deflation)
@@ -781,12 +788,14 @@ def export_binary(context, filepath):
     return 0
 
 
-def export_mufflon(context, filepath):
+def export_mufflon(context, filepath, use_selection, use_compression,
+                   use_deflation):
     filename = os.path.splitext(filepath)[0]
     binfilepath = filename + ".mff"
     if export_json(context, filepath, binfilepath) == 0:
         print("Succeeded exporting JSON")
-        if export_binary(context, binfilepath) == 0:
+        if export_binary(context, binfilepath, use_selection,
+                         use_compression, use_deflation) == 0:
             print("Succeeded exporting binary")
         else:
             print("Failed exporting binary")
@@ -834,12 +843,12 @@ class MufflonExporter(Operator, ExportHelper):
             description="Export selected objects only",
             default=True,
             )
-    use_selection = BoolProperty(
+    use_compression = BoolProperty(
             name="Compress normals",
             description="Apply compression to vertex normals (Octahedral)",
             default=False,
             )
-    use_selection = BoolProperty(
+    use_deflation = BoolProperty(
             name="Deflate",
             description="Use deflation to reduce file size",
             default=False,
@@ -847,7 +856,8 @@ class MufflonExporter(Operator, ExportHelper):
     path_mode = path_reference_mode
 
     def execute(self, context):
-        return export_mufflon(context, self.filepath)
+        return export_mufflon(context, self.filepath, self.use_selection,
+                              self.use_compression, self.use_deflation)
 
 
 # Only needed if you want to add into a dynamic menu
