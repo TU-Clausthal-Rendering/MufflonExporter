@@ -20,7 +20,7 @@ bl_info = {
     "category": "Import-Export"
 }
 
-def export_json(context, filepath, binfilepath):
+def export_json(context, self, filepath, binfilepath):
     version = "1.0"
     binary = os.path.relpath(binfilepath, os.path.commonpath([filepath, binfilepath]))
 
@@ -76,7 +76,7 @@ def export_json(context, filepath, binfilepath):
             orthoHeight = scn.render.resolution_y / scn.render.resolution_x * orthoWidth  # get aspect ratio via resolution
             dataDictionary['cameras'][camera.name]['height'] = orthoHeight
         else:
-            print("Warning: Skipping unsupported camera type: \"%s\" from: \"%s\"." % camera.type, camera.name)
+            self.report({'WARNING'}, ("Skipping unsupported camera type: \"%s\" from: \"%s\"." % camera.type, camera.name))
             continue
         cameraPath = []
         viewDirectionPath = []
@@ -101,7 +101,7 @@ def export_json(context, filepath, binfilepath):
         dataDictionary['cameras'][camera.name]['up'] = upPath
 
     if len(dataDictionary['cameras']) == 0:
-        print("Error: No camera found.")  # Stop if no camera was exported
+        self.report({'ERROR'}, "No camera found.")  # Stop if no camera was exported
         return -1
 
     # Lights
@@ -141,7 +141,7 @@ def export_json(context, filepath, binfilepath):
             dataDictionary['lights'][lamp.name]['width'] = lamp.spot_size / 2
             dataDictionary['lights'][lamp.name]['falloffStart'] = lamp.spot_size / 2
         else:
-            print("Warning: Skipping unsupported lamp type: \"%s\" from: \"%s\"." % lamp.type, lamp.name)
+            self.report({'WARNING'}, ("Skipping unsupported lamp type: \"%s\" from: \"%s\"." % lamp.type, lamp.name))
             continue
         # TODO envmap, goniometric
 
@@ -169,24 +169,27 @@ def export_json(context, filepath, binfilepath):
                 continue
             if textureSlot.texture.type != "IMAGE":
                 continue
+            if textureSlot.texture.image is None:
+                self.report({'WARNING'}, ("Skipping image texture \"%s\" from material: \"%s\" because it has no image." % (textureSlot.texture.name, material.name)))
+                continue
             if textureSlot.use_map_color_diffuse:
                 if 'diffuse' in textureMap:
-                    print("Warning: Too many diffuse textures: \"%s\",\"%s\" from material: \"%s\"." % (textureSlots[textureMap['diffuse']].name, textureSlot.name, material.name))
+                    self.report({'WARNING'}, ("Too many diffuse textures: \"%s\",\"%s\" from material: \"%s\"." % (textureSlots[textureMap['diffuse']].name, textureSlot.name, material.name)))
                 else:
                     textureMap['diffuse'] = j
             if textureSlot.use_map_color_spec:
                 if 'specular' in textureMap:
-                    print("Warning: Too many specular textures: \"%s\",\"%s\" from material: \"%s\"." % (textureSlots[textureMap['specular']].name, textureSlot.name, material.name))
+                    self.report({'WARNING'}, ("Too many specular textures: \"%s\",\"%s\" from material: \"%s\"." % (textureSlots[textureMap['specular']].name, textureSlot.name, material.name)))
                 else:
                     textureMap['specular'] = j
             if textureSlot.use_map_emit:
                 if 'emissive' in textureMap:
-                    print("Warning: Too many emissive textures: \"%s\",\"%s\" from material: \"%s\"." % (textureSlots[textureMap['emissive']].name, textureSlot.name, material.name))
+                    self.report({'WARNING'}, ("Too many emissive textures: \"%s\",\"%s\" from material: \"%s\"." % (textureSlots[textureMap['emissive']].name, textureSlot.name, material.name)))
                 else:
                     textureMap['emissive'] = j
             if textureSlot.use_map_hardness:
                 if 'roughness' in textureMap:
-                    print("Warning: Too many roughness textures: \"%s\",\"%s\" from material: \"%s\"." % (textureSlots[textureMap['roughness']].name, textureSlot.name, material.name))
+                    self.report({'WARNING'}, ("Too many roughness textures: \"%s\",\"%s\" from material: \"%s\"." % (textureSlots[textureMap['roughness']].name, textureSlot.name, material.name)))
                 else:
                     textureMap['roughness'] = j
         if material.use_transparency:
@@ -198,7 +201,7 @@ def export_json(context, filepath, binfilepath):
                 layerCount += 1
                 ignoreDiffuse = False
         elif 'diffuse' in textureMap:
-            print("Warning: Initialised diffuse Texture: \"%s\" from unsupported diffuse material: \"%s\" as Lambert material." % (textureSlots[textureMap['diffuse']].name, material.name))
+            self.report({'WARNING'}, ("Initialised diffuse Texture: \"%s\" from unsupported diffuse material: \"%s\" as Lambert material." % (textureSlots[textureMap['diffuse']].name, material.name)))
             layerCount += 1
             ignoreDiffuse = False
             unsupportedDiffuse = True
@@ -209,9 +212,9 @@ def export_json(context, filepath, binfilepath):
                 ignoreSpecular = False
         elif material.diffuse_shader != "FRESNEL":
             if 'specular' in textureMap:
-                print("Warning: Ignored specular Texture: \"%s\" from unsupported specular material: \"%s\"." % (textureSlots[textureMap['specular']].name, material.name))
+                self.report({'WARNING'}, ("Ignored specular Texture: \"%s\" from unsupported specular material: \"%s\"." % (textureSlots[textureMap['specular']].name, material.name)))
             if 'roughness' in textureMap:
-                print("Warning: Ignored roughness Texture: \"%s\" from unsupported specular material: \"%s\"." % (textureSlots[textureMap['roughness']].name, material.name))
+                self.report({'WARNING'}, ("Ignored roughness Texture: \"%s\" from unsupported specular material: \"%s\"." % (textureSlots[textureMap['roughness']].name, material.name)))
         if material.emit != 0:
             layerCount += 1
         if material.name not in dataDictionary['materials']:
@@ -228,14 +231,14 @@ def export_json(context, filepath, binfilepath):
                 dataDictionary['materials'][material.name]['layerB'] = collections.OrderedDict()
             workDictionary = dataDictionary['materials'][material.name]['layerA']
         else:
-            print("Warning: Initialised unsupported material: \"%s\" as lambert material." % material.name)
+            self.report({'WARNING'}, ("Initialised unsupported material: \"%s\" as lambert material." % material.name))
             materialType = "lambert"
             dataDictionary['materials'][material.name]['type'] = materialType
             dataDictionary['materials'][material.name]['albedo'] = ([material.diffuse_color.r, material.diffuse_color.g, material.diffuse_color.b])
             continue
         currentLayer = 0
         if material.emit == 0 and 'emissive' in textureMap:
-            print("Warning ignored emissive texture:\"%s\" from material:\"%s\" because emit factor is 0." % (textureSlots[textureMap['emissive']].name, material.name))
+            self.report({'WARNING'}, ("Ignored emissive texture:\"%s\" from material:\"%s\" because emit factor is 0." % (textureSlots[textureMap['emissive']].name, material.name)))
         if material.emit != 0:
             materialType = "emissive"
             workDictionary['type'] = materialType
@@ -407,12 +410,12 @@ def export_json(context, filepath, binfilepath):
                     if layerCount - currentLayer != 0:  # if current layer was A set work dictionary to B
                         workDictionary = workDictionary['layerB']
         if currentLayer != layerCount:
-            print("Error: Expected %d layers but %d were used at material: \"%s\"." % (layerCount, currentLayer, material.name))
+            self.report({'ERROR'}, ("Expected %d layers but %d were used at material: \"%s\"." % (layerCount, currentLayer, material.name)))
             return -1
 
     # Scenarios
     if len(bpy.data.scenes) > 1:
-        print("Warning: multiple scenes found only exporting active scene.")
+        self.report({'WARNING'}, ("Multiple scenes found. Only exporting active scene."))
     if scn.name not in dataDictionary['scenarios']:
         dataDictionary['scenarios'][scn.name] = collections.OrderedDict()
     cameraName = ''  # type: str
@@ -454,7 +457,7 @@ def export_json(context, filepath, binfilepath):
     file.close()
     return 0
 
-def export_binary(context, filepath, use_selection, use_deflation, use_compression):
+def export_binary(context, self, filepath, use_selection, use_deflation, use_compression):
     scn = context.scene
     # Binary
     binary = bytearray()
@@ -579,7 +582,7 @@ def export_binary(context, filepath, use_selection, use_deflation, use_compressi
                 if len(lodObject.lod_levels) == 0:
                     lodLevels = []
                     lodChainStart = 0
-                    print("Warning: Skipped LOD levels from: \"%s\" because LOD Object: \"%s\" has no successor." % (currentObject.name, lodObject.name))
+                    self.report({'WARNING'}, ("Skipped LOD levels from: \"%s\" because LOD Object: \"%s\" has no successor." % (currentObject.name, lodObject.name)))
                     break
                 if maxDistance < lodObject.lod_levels[1].distance:
                     maxDistance = lodObject.lod_levels[1].distance  # the last LOD level has the highest distance
@@ -632,7 +635,7 @@ def export_binary(context, filepath, use_selection, use_deflation, use_compressi
                 elif numVertices == 4:
                     numberOfQuads += 1
                 else:
-                    print("Error: %d Vertices in face from object: \"%s\"." % (numVertices, lodObject.name))
+                    self.report({'ERROR'}, ("%d Vertices in face from object: \"%s\"." % (numVertices, lodObject.name)))
                     return
             bm.to_mesh(mesh)
             bm.free()
@@ -664,7 +667,7 @@ def export_binary(context, filepath, use_selection, use_deflation, use_compressi
             mesh.calc_normals()
             uvCoordinates = numpy.empty(len(vertices), dtype=object)
             if len(mesh.uv_layers) == 0:
-                print("Warning: LOD Object: \"%s\" has no uv layers." % (lodObject.name))
+                self.report({'WARNING'}, ("LOD Object: \"%s\" has no uv layers." % (lodObject.name)))
                 for k in range(len(uvCoordinates)):
                     acos = math.acos(vertices[k].co[1]/(math.sqrt((vertices[k].co[0]*vertices[k].co[0]) + (vertices[k].co[1]*vertices[k].co[1]) + (vertices[k].co[2]*vertices[k].co[2]))))
                     arctan2 = numpy.arctan2(vertices[k].co[2], vertices[k].co[0])
@@ -788,20 +791,23 @@ def export_binary(context, filepath, use_selection, use_deflation, use_compressi
     return 0
 
 
-def export_mufflon(context, filepath, use_selection, use_compression,
+def export_mufflon(context, self, filepath, use_selection, use_compression,
                    use_deflation):
     filename = os.path.splitext(filepath)[0]
     binfilepath = filename + ".mff"
-    if export_json(context, filepath, binfilepath) == 0:
+    if export_json(context, self, filepath, binfilepath) == 0:
         print("Succeeded exporting JSON")
-        if export_binary(context, binfilepath, use_selection,
+        if export_binary(context, self, binfilepath, use_selection,
                          use_compression, use_deflation) == 0:
             print("Succeeded exporting binary")
         else:
             print("Failed exporting binary")
+            print("Stopped exporting")
+            return {'CANCELLED'}
     else:
         print("Failed exporting JSON")
         print("Stopped exporting")
+        return {'CANCELLED'}
     return {'FINISHED'}
 
 def pack_normal32(vec3):
@@ -856,7 +862,7 @@ class MufflonExporter(Operator, ExportHelper):
     path_mode = path_reference_mode
 
     def execute(self, context):
-        return export_mufflon(context, self.filepath, self.use_selection,
+        return export_mufflon(context, self, self.filepath, self.use_selection,
                               self.use_compression, self.use_deflation)
 
 
