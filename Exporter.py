@@ -9,6 +9,7 @@ import numpy
 import math
 import zlib
 from collections import OrderedDict
+import re
 
 bl_info = {
     "name": "Mufflon Exporter",
@@ -37,7 +38,11 @@ def export_json(context, self, filepath, binfilepath):
         file = open(filepath, 'r')
         jsonStr = file.read()
         file.close()
-        oldData = json.loads(jsonStr, object_pairs_hook=OrderedDict)  # loads the old json and preserves ordering
+        try:
+            oldData = json.loads(jsonStr, object_pairs_hook=OrderedDict)  # loads the old json and preserves ordering
+        except json.decoder.JSONDecodeError as e:
+            self.report({'ERROR'}, "Old JSON has wrong format: " + str(e))
+            return -1
         dataDictionary['cameras'] = oldData['cameras']
         dataDictionary['lights'] = oldData['lights']
         dataDictionary['materials'] = oldData['materials']
@@ -450,9 +455,16 @@ def export_json(context, self, filepath, binfilepath):
         dataDictionary['scenarios'][scn.name]['objectProperties'] = collections.OrderedDict()
     # TODO objectProperties
 
-    file = open(filepath, 'w')
     # To reduce float precision it is necessary to do the store->load->store (even if it is ugly)
     dump = json.dumps(json.loads(json.dumps(dataDictionary, indent=4), object_pairs_hook=OrderedDict, parse_float=lambda x: round(float(x), 3)), indent=4)
+
+    vectorOccurrences = re.findall(r"[[](?:\s*-?\d+(?:\.\d+)?,){0,3}\s*-?\d+(?:\.\d+)?,?\s*[\]]", dump)  # Find Vec1-4 with regular expression
+    for vec in vectorOccurrences:
+        print(vec)
+        shortVector3 = re.sub(r"\s+", " ", vec)  # Shorten it
+        print(shortVector3)
+        dump = dump.replace(vec, shortVector3)
+    file = open(filepath, 'w')
     file.write(dump)
     file.close()
     return 0
