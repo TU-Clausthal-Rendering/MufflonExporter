@@ -11,6 +11,8 @@ import zlib
 from collections import OrderedDict
 import re
 
+# TODO Sphere if Object has Custom Propertie Sphere
+
 bl_info = {
     "name": "Mufflon Exporter",
     "description": "Exporter for the custom Mufflon file format",
@@ -50,11 +52,11 @@ def export_json(context, self, filepath, binfilepath):
 
     # Cameras
 
-    cameras = bpy.data.cameras
+    cameras = [o for o in bpy.data.objects if o.type == 'CAMERA']
 
     for i in range(len(cameras)):
-        camera = cameras[i]
-        cameraObject = bpy.data.objects[camera.name]
+        cameraObject = cameras[i]
+        camera = cameraObject.data
         if camera.type == "PERSP":
             aperture = camera.gpu_dof.fstop
             if camera.name not in dataDictionary['cameras']:
@@ -81,7 +83,7 @@ def export_json(context, self, filepath, binfilepath):
             orthoHeight = scn.render.resolution_y / scn.render.resolution_x * orthoWidth  # get aspect ratio via resolution
             dataDictionary['cameras'][camera.name]['height'] = orthoHeight
         else:
-            self.report({'WARNING'}, ("Skipping unsupported camera type: \"%s\" from: \"%s\"." % camera.type, camera.name))
+            self.report({'WARNING'}, ("Skipping unsupported camera type: \"%s\" from: \"%s\"." % (camera.type, camera.name)))
             continue
         cameraPath = []
         viewDirectionPath = []
@@ -111,10 +113,10 @@ def export_json(context, self, filepath, binfilepath):
 
     # Lights
 
-    lamps = bpy.data.lamps
+    lamps = [o for o in bpy.data.objects if o.type == 'LAMP']
     for i in range(len(lamps)):
-        lamp = lamps[i]
-        lampObject = bpy.data.objects[lamp.name]
+        lampObject = lamps[i]
+        lamp = lampObject.data
         if lamp.type == "POINT":
             if lamp.name not in dataDictionary['lights']:
                 dataDictionary['lights'][lamp.name] = collections.OrderedDict()
@@ -146,7 +148,7 @@ def export_json(context, self, filepath, binfilepath):
             dataDictionary['lights'][lamp.name]['width'] = lamp.spot_size / 2
             dataDictionary['lights'][lamp.name]['falloffStart'] = lamp.spot_size / 2
         else:
-            self.report({'WARNING'}, ("Skipping unsupported lamp type: \"%s\" from: \"%s\"." % lamp.type, lamp.name))
+            self.report({'WARNING'}, ("Skipping unsupported lamp type: \"%s\" from: \"%s\"." % (lamp.type, lamp.name)))
             continue
         # TODO envmap, goniometric
 
@@ -435,10 +437,10 @@ def export_json(context, self, filepath, binfilepath):
 
     dataDictionary['scenarios'][scn.name]['camera'] = cameraName
     dataDictionary['scenarios'][scn.name]['resolution'] = [scn.render.resolution_x, scn.render.resolution_y]
-    lamps = bpy.data.lamps
+    lamps = [o for o in bpy.data.objects if o.type == 'LAMP']
     lights = []
     for i in range(len(lamps)):
-        lamp = lamps[i]
+        lamp = lamps[i].data
         if lamp.type == "POINT" or lamp.type == "SUN" or lamp.type == "SPOT":
             lights.append(lamp.name)
 
@@ -513,7 +515,7 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
     # Next section start position
     binary.extend((0).to_bytes(8, byteorder='little'))  # has to be corrected when the value is known
     # Global object flags (compression etc.)
-    flags = 0x0  # TODO read custom compression properties
+    flags = 0x0
     if use_deflation:
         flags |= 1
     if use_compression:
@@ -540,7 +542,7 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
     activeObject = scn.objects.active
     for i in range(len(objects)):
         currentObject = objects[i]
-        if currentObject.type != "MESH":
+        if currentObject.type != "MESH": # TODO or has sphere attribute
             continue
         if currentObject.data in usedMeshes:
             continue
@@ -708,7 +710,7 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
                 vertexDataArray.extend(struct.pack('<f', uvCoordinates[k][1]))
             vertexOutData = vertexDataArray
             if use_deflation and len(vertexDataArray) > 0:
-                vertexOutData = zlib.compress(vertexDataArray, 8)
+                vertexOutData = zlib.compress(vertexDataArray, 8)  # TODO deflate algorithm doesn't do what we want it to do
                 binary.extend(len(vertexOutData).to_bytes(4, byteorder='little'))
                 binary.extend(len(vertexDataArray).to_bytes(4, byteorder='little'))
             binary.extend(vertexOutData)
