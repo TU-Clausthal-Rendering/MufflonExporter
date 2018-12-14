@@ -20,7 +20,6 @@ bl_info = {
     "category": "Import-Export"
 }
 
-
 def export_json(context, filepath, binfilepath):
     version = "1.0"
     binary = os.path.relpath(binfilepath, os.path.commonpath([filepath, binfilepath]))
@@ -449,10 +448,11 @@ def export_json(context, filepath, binfilepath):
     # TODO objectProperties
 
     file = open(filepath, 'w')
-    file.write(json.dumps(dataDictionary, indent=4))
+    # To reduce float precision it is necessary to do the store->load->store (even if it is ugly)
+    dump = json.dumps(json.loads(json.dumps(dataDictionary, indent=4), object_pairs_hook=OrderedDict, parse_float=lambda x: round(float(x), 3)), indent=4)
+    file.write(dump)
     file.close()
     return 0
-
 
 def export_binary(context, filepath, use_selection, use_deflation, use_compression):
     scn = context.scene
