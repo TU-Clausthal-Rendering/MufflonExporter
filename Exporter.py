@@ -11,8 +11,6 @@ import zlib
 from collections import OrderedDict
 import re
 
-# TODO Sphere if Object has Custom Propertie Sphere
-
 bl_info = {
     "name": "Mufflon Exporter",
     "description": "Exporter for the custom Mufflon file format",
@@ -150,7 +148,22 @@ def export_json(context, self, filepath, binfilepath):
         else:
             self.report({'WARNING'}, ("Skipping unsupported lamp type: \"%s\" from: \"%s\"." % (lamp.type, lamp.name)))
             continue
-        # TODO envmap, goniometric
+        # TODO goniometric
+    world = scn.world
+    worldTextureSlot = world.texture_slots[world.active_texture_index]
+    if worldTextureSlot.texture is not None:
+        if worldTextureSlot.texture.type == "IMAGE":
+            if worldTextureSlot.texture.image is None:
+                self.report({'WARNING'}, ("Skipping environment map\"%s\" because it has no image." % worldTextureSlot.texture.name))
+            else:
+                dataDictionary['lights'][worldTextureSlot.texture.name] = collections.OrderedDict()
+                absPath = bpy.path.abspath(worldTextureSlot.texture.image.filepath)
+                finalPath = os.path.relpath(absPath, os.path.dirname(filepath))
+                finalPath = finalPath.replace("\\", "/")
+                lightType = "envmap"
+                dataDictionary['lights'][worldTextureSlot.texture.name]["type"] = lightType
+                dataDictionary['lights'][worldTextureSlot.texture.name]["map"] = finalPath
+                dataDictionary['lights'][worldTextureSlot.texture.name]["scale"] = worldTextureSlot.horizon_factor
 
     # Materials
 
