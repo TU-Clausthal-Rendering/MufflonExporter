@@ -542,7 +542,7 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
     activeObject = scn.objects.active
     for i in range(len(objects)):
         currentObject = objects[i]
-        if currentObject.type != "MESH": # TODO or has sphere attribute
+        if currentObject.type != "MESH" and "sphere" not in currentObject:  # If mesh or sphere
             continue
         if currentObject.data in usedMeshes:
             continue
@@ -653,113 +653,142 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
                     return
             bm.to_mesh(mesh)
             bm.free()
+            numberOfSpheres = 0
+            numberOfVertices = len(mesh.vertices)
+            numberOfEdges = len(mesh.edges)
+            numberOfVertexAttributes = 0  # TODO Vertex Attributes
+            numberOfFaceAttributes = 0  # TODO Face Attributes
+            numberOfSphereAttributes = 0
+            if "sphere" in lodObject: # Change Values if it is an sphere
+                numberOfTriangles = 0
+                numberOfQuads = 0
+                numberOfSpheres = 1
+                numberOfVertices = 0
+                numberOfEdges = 0
+                numberOfVertexAttributes = 0
+                numberOfFaceAttributes = 0
+                numberOfSphereAttributes = 0  # TODO Sphere Attributes
+
             # Number of Triangles
             binary.extend(numberOfTriangles.to_bytes(4, byteorder='little'))
             # Number of Quads
             binary.extend(numberOfQuads.to_bytes(4, byteorder='little'))
             # Number of Spheres
-            numberOfSpheres = 0
-            numberOfSpheresBinaryPosition = len(binary)
-            binary.extend(numberOfSpheres.to_bytes(4, byteorder='little'))  # TODO has to be corrected when the value is known
+            binary.extend(numberOfSpheres.to_bytes(4, byteorder='little'))
             # Number of Vertices
-            numberOfVertices = len(mesh.vertices)
             binary.extend(numberOfVertices.to_bytes(4, byteorder='little'))
             # Number of Edges
-            numberOfEdges = len(mesh.edges)
             binary.extend(numberOfEdges.to_bytes(4, byteorder='little'))
             # Number of Vertex Attributes
-            numberOfVertexAttributes = 0  # TODO Vertex Attributes
             binary.extend(numberOfVertexAttributes.to_bytes(4, byteorder='little'))
             # Number of Face Attributes
-            numberOfFaceAttributes = 0  # TODO Face Attributes
             binary.extend(numberOfFaceAttributes.to_bytes(4, byteorder='little'))
             # Number of Sphere Attributes
-            numberOfSphereAttributes = 0  # TODO Sphere Attributes
             binary.extend(numberOfSphereAttributes.to_bytes(4, byteorder='little'))
-            # Vertex data
-            vertices = mesh.vertices
-            mesh.calc_normals()
-            uvCoordinates = numpy.empty(len(vertices), dtype=object)
-            if len(mesh.uv_layers) == 0:
-                self.report({'WARNING'}, ("LOD Object: \"%s\" has no uv layers." % (lodObject.name)))
-                for k in range(len(uvCoordinates)):
-                    acos = math.acos(vertices[k].co[1]/(math.sqrt((vertices[k].co[0]*vertices[k].co[0]) + (vertices[k].co[1]*vertices[k].co[1]) + (vertices[k].co[2]*vertices[k].co[2]))))
-                    arctan2 = numpy.arctan2(vertices[k].co[2], vertices[k].co[0])
-                    uvCoordinates[k] = [acos, arctan2]
-            else:
-                uv_layer = mesh.uv_layers.active.data
-                for polygon in mesh.polygons:
-                    for loop_index in range(polygon.loop_start, polygon.loop_start + polygon.loop_total):
-                        uvCoordinates[mesh.loops[loop_index].vertex_index] = uv_layer[loop_index].uv
-            vertexDataArray = bytearray()  # Used for deflation
-            for k in range(len(vertices)):
-                vertex = mesh.vertices[k]
-                coordinates = vertex.co
-                vertexDataArray.extend(struct.pack('<f', coordinates[0]))
-                vertexDataArray.extend(struct.pack('<f', coordinates[2]))
-                vertexDataArray.extend(struct.pack('<f', coordinates[1]))
-                normal = vertex.normal
-                if use_compression:
-                    vertexDataArray.extend(pack_normal32(normal).to_bytes(4, byteorder='little'))
+            if "sphere" not in lodObject:
+                # Vertex data
+                vertices = mesh.vertices
+                mesh.calc_normals()
+                uvCoordinates = numpy.empty(len(vertices), dtype=object)
+                if len(mesh.uv_layers) == 0:
+                    self.report({'WARNING'}, ("LOD Object: \"%s\" has no uv layers." % (lodObject.name)))
+                    for k in range(len(uvCoordinates)):
+                        acos = math.acos(vertices[k].co[1]/(math.sqrt((vertices[k].co[0]*vertices[k].co[0]) + (vertices[k].co[1]*vertices[k].co[1]) + (vertices[k].co[2]*vertices[k].co[2]))))
+                        arctan2 = numpy.arctan2(vertices[k].co[2], vertices[k].co[0])
+                        uvCoordinates[k] = [acos, arctan2]
                 else:
-                    vertexDataArray.extend(struct.pack('<f', normal[0]))
-                    vertexDataArray.extend(struct.pack('<f', normal[2]))
-                    vertexDataArray.extend(struct.pack('<f', normal[1]))
-                # uv
-                vertexDataArray.extend(struct.pack('<f', uvCoordinates[k][0]))
-                vertexDataArray.extend(struct.pack('<f', uvCoordinates[k][1]))
-            vertexOutData = vertexDataArray
-            if use_deflation and len(vertexDataArray) > 0:
-                vertexOutData = zlib.compress(vertexDataArray, 8)  # TODO deflate algorithm doesn't do what we want it to do
-                binary.extend(len(vertexOutData).to_bytes(4, byteorder='little'))
-                binary.extend(len(vertexDataArray).to_bytes(4, byteorder='little'))
-            binary.extend(vertexOutData)
+                    uv_layer = mesh.uv_layers.active.data
+                    for polygon in mesh.polygons:
+                        for loop_index in range(polygon.loop_start, polygon.loop_start + polygon.loop_total):
+                            uvCoordinates[mesh.loops[loop_index].vertex_index] = uv_layer[loop_index].uv
+                vertexDataArray = bytearray()  # Used for deflation
+                for k in range(len(vertices)):
+                    vertex = mesh.vertices[k]
+                    coordinates = vertex.co
+                    vertexDataArray.extend(struct.pack('<f', coordinates[0]))
+                    vertexDataArray.extend(struct.pack('<f', coordinates[2]))
+                    vertexDataArray.extend(struct.pack('<f', coordinates[1]))
+                    normal = vertex.normal
+                    if use_compression:
+                        vertexDataArray.extend(pack_normal32(normal).to_bytes(4, byteorder='little'))
+                    else:
+                        vertexDataArray.extend(struct.pack('<f', normal[0]))
+                        vertexDataArray.extend(struct.pack('<f', normal[2]))
+                        vertexDataArray.extend(struct.pack('<f', normal[1]))
+                    # uv
+                    vertexDataArray.extend(struct.pack('<f', uvCoordinates[k][0]))
+                    vertexDataArray.extend(struct.pack('<f', uvCoordinates[k][1]))
+                vertexOutData = vertexDataArray
+                if use_deflation and len(vertexDataArray) > 0:
+                    vertexOutData = zlib.compress(vertexDataArray, 8)  # TODO deflate algorithm doesn't do what we want it to do
+                    binary.extend(len(vertexOutData).to_bytes(4, byteorder='little'))
+                    binary.extend(len(vertexDataArray).to_bytes(4, byteorder='little'))
+                binary.extend(vertexOutData)
 
-            # Attributes
-            # TODO Attributes (with deflation)
-            # Triangles
-            triangleDataArray = bytearray()  # Used for deflation
-            for polygon in mesh.polygons:
-                if len(polygon.vertices) == 3:
-                    for k in range(3):
-                        triangleDataArray.extend(polygon.vertices[k].to_bytes(4, byteorder='little'))
-            triangleOutData = triangleDataArray
-            if use_deflation and len(triangleDataArray) > 0:
-                triangleOutData = zlib.compress(triangleDataArray, 8)
-                binary.extend(len(triangleOutData).to_bytes(4, byteorder='little'))
-                binary.extend(len(triangleDataArray).to_bytes(4, byteorder='little'))
-            binary.extend(triangleOutData)
-            # Quads
-            quadDataArray = bytearray()  # Used for deflation
-            for polygon in mesh.polygons:
-                if len(polygon.vertices) == 4:
-                    for k in range(4):
-                        quadDataArray.extend(polygon.vertices[k].to_bytes(4, byteorder='little'))
-            quadOutData = quadDataArray
-            if use_deflation and len(quadDataArray) > 0:
-                quadOutData = zlib.compress(quadDataArray, 8)
-                binary.extend(len(quadOutData).to_bytes(4, byteorder='little'))
-                binary.extend(len(quadDataArray).to_bytes(4, byteorder='little'))
-            binary.extend(quadOutData)
-            # Material IDs
-            matIDDataArray = bytearray()
-            for polygon in mesh.polygons:
-                if len(polygon.vertices) == 3:
-                    matIDDataArray.extend(polygon.material_index.to_bytes(2, byteorder='little'))
-            for polygon in mesh.polygons:
-                if len(polygon.vertices) == 4:
-                    matIDDataArray.extend(polygon.material_index.to_bytes(2, byteorder='little'))
-            matIDOutData = matIDDataArray
-            if use_deflation and len(matIDDataArray) > 0:
-                matIDOutData = zlib.compress(matIDDataArray, 8)
-                binary.extend(len(matIDOutData).to_bytes(4, byteorder='little'))
-                binary.extend(len(matIDDataArray).to_bytes(4, byteorder='little'))
-            binary.extend(matIDOutData)
-            # Face Attributes
-            # TODO Face Attributes (with deflation)
-            # Spheres
-            # TODO Spheres (with deflation)
+                # Attributes
+                # TODO Attributes (with deflation)
+                # Triangles
+                triangleDataArray = bytearray()  # Used for deflation
+                for polygon in mesh.polygons:
+                    if len(polygon.vertices) == 3:
+                        for k in range(3):
+                            triangleDataArray.extend(polygon.vertices[k].to_bytes(4, byteorder='little'))
+                triangleOutData = triangleDataArray
+                if use_deflation and len(triangleDataArray) > 0:
+                    triangleOutData = zlib.compress(triangleDataArray, 8)
+                    binary.extend(len(triangleOutData).to_bytes(4, byteorder='little'))
+                    binary.extend(len(triangleDataArray).to_bytes(4, byteorder='little'))
+                binary.extend(triangleOutData)
+                # Quads
+                quadDataArray = bytearray()  # Used for deflation
+                for polygon in mesh.polygons:
+                    if len(polygon.vertices) == 4:
+                        for k in range(4):
+                            quadDataArray.extend(polygon.vertices[k].to_bytes(4, byteorder='little'))
+                quadOutData = quadDataArray
+                if use_deflation and len(quadDataArray) > 0:
+                    quadOutData = zlib.compress(quadDataArray, 8)
+                    binary.extend(len(quadOutData).to_bytes(4, byteorder='little'))
+                    binary.extend(len(quadDataArray).to_bytes(4, byteorder='little'))
+                binary.extend(quadOutData)
+                # Material IDs
+                matIDDataArray = bytearray()
+                for polygon in mesh.polygons:
+                    if len(polygon.vertices) == 3:
+                        matIDDataArray.extend(polygon.material_index.to_bytes(2, byteorder='little'))
+                for polygon in mesh.polygons:
+                    if len(polygon.vertices) == 4:
+                        matIDDataArray.extend(polygon.material_index.to_bytes(2, byteorder='little'))
+                matIDOutData = matIDDataArray
+                if use_deflation and len(matIDDataArray) > 0:
+                    matIDOutData = zlib.compress(matIDDataArray, 8)
+                    binary.extend(len(matIDOutData).to_bytes(4, byteorder='little'))
+                    binary.extend(len(matIDDataArray).to_bytes(4, byteorder='little'))
+                binary.extend(matIDOutData)
+                # Face Attributes
+                # TODO Face Attributes (with deflation)
+            else:
+                # Spheres
+                sphereDataArray = bytearray()
+                center = []
+                center.append((boundingBoxMin[0]+boundingBoxMax[0])/2)
+                center.append((boundingBoxMin[1] + boundingBoxMax[1]) / 2)
+                center.append((boundingBoxMin[2] + boundingBoxMax[2]) / 2)
+                radius = abs(boundingBoxMin[0]-(center[0]))
+                sphereDataArray.extend(struct.pack('<f', center[0]))
+                sphereDataArray.extend(struct.pack('<f', center[2]))
+                sphereDataArray.extend(struct.pack('<f', center[1]))
+                sphereDataArray.extend(struct.pack('<f', radius))
 
+                sphereDataArray.extend(lodObject.active_material_index.to_bytes(2, byteorder='little'))
+
+                sphereOutData = sphereDataArray
+                # TODO Sphere Attributes
+                if use_deflation and len(sphereDataArray) > 0:
+                    matIDOutData = zlib.compress(sphereDataArray, 8)
+                    binary.extend(len(sphereOutData).to_bytes(4, byteorder='little'))
+                    binary.extend(len(sphereDataArray).to_bytes(4, byteorder='little'))
+                binary.extend(sphereOutData)
             bpy.data.meshes.remove(mesh)
             # reset used mode
             bpy.ops.object.mode_set(mode=mode)
