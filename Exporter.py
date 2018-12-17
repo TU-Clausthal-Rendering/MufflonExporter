@@ -118,11 +118,28 @@ def export_json(context, self, filepath, binfilepath):
         if lamp.type == "POINT":
             if lamp.name not in dataDictionary['lights']:
                 dataDictionary['lights'][lamp.name] = collections.OrderedDict()
-            lightType = "point"
-            dataDictionary['lights'][lamp.name]['type'] = lightType
-            dataDictionary['lights'][lamp.name]['position'] = [lampObject.location.x, lampObject.location.z, lampObject.location.y]
-            dataDictionary['lights'][lamp.name]['intensity'] = [lamp.color.r, lamp.color.g, lamp.color.b]
-            dataDictionary['lights'][lamp.name]['scale'] = lamp.energy
+            if lamp.active_texture is not None:
+                lampTextureSlot = lamp.texture_slots[lamp.active_texture_index]
+                if lampTextureSlot.texture.type != "IMAGE":
+                    self.report({'WARNING'}, ("Skipping goniometric lamp: \"%s\" because Texture: \"%s\" is not an image." % (lamp.name, lampTextureSlot.texture.name)))
+                else:
+                    if lampTextureSlot.texture.image is None:
+                        self.report({'WARNING'}, ("Skipping goniometric lamp: \"%s\" because Texture: \"%s\" has no image." % (lamp.name, lampTextureSlot.texture.name)))
+                    else:
+                        lightType = "goniometric"
+                        dataDictionary['lights'][lamp.name]['type'] = lightType
+                        dataDictionary['lights'][lamp.name]['position'] = [lampObject.location.x, lampObject.location.z, lampObject.location.y]
+                        absPath = bpy.path.abspath(lampTextureSlot.texture.image.filepath)
+                        finalPath = os.path.relpath(absPath, os.path.dirname(filepath))
+                        finalPath = finalPath.replace("\\", "/")
+                        dataDictionary['lights'][lamp.name]['map'] = finalPath
+                        dataDictionary['lights'][lamp.name]['scale'] = lamp.energy
+            else:
+                lightType = "point"
+                dataDictionary['lights'][lamp.name]['type'] = lightType
+                dataDictionary['lights'][lamp.name]['position'] = [lampObject.location.x, lampObject.location.z, lampObject.location.y]
+                dataDictionary['lights'][lamp.name]['intensity'] = [lamp.color.r, lamp.color.g, lamp.color.b]
+                dataDictionary['lights'][lamp.name]['scale'] = lamp.energy
         elif lamp.type == "SUN":
             if lamp.name not in dataDictionary['lights']:
                 dataDictionary['lights'][lamp.name] = collections.OrderedDict()
@@ -148,13 +165,14 @@ def export_json(context, self, filepath, binfilepath):
         else:
             self.report({'WARNING'}, ("Skipping unsupported lamp type: \"%s\" from: \"%s\"." % (lamp.type, lamp.name)))
             continue
-        # TODO goniometric
     world = scn.world
     worldTextureSlot = world.texture_slots[world.active_texture_index]
     if worldTextureSlot.texture is not None:
-        if worldTextureSlot.texture.type == "IMAGE":
+        if worldTextureSlot.texture.type != "IMAGE":
+            self.report({'WARNING'}, ("Skipping environment map: \"%s\" because it is not an image." % worldTextureSlot.texture.name))
+        else:
             if worldTextureSlot.texture.image is None:
-                self.report({'WARNING'}, ("Skipping environment map\"%s\" because it has no image." % worldTextureSlot.texture.name))
+                self.report({'WARNING'}, ("Skipping environment map: \"%s\" because it has no image." % worldTextureSlot.texture.name))
             else:
                 dataDictionary['lights'][worldTextureSlot.texture.name] = collections.OrderedDict()
                 absPath = bpy.path.abspath(worldTextureSlot.texture.image.filepath)
@@ -188,6 +206,8 @@ def export_json(context, self, filepath, binfilepath):
             if textureSlot is None:
                 continue
             if textureSlot.texture.type != "IMAGE":
+                self.report({'WARNING'}, (
+                            "Skipping image texture \"%s\" from material: \"%s\" because it is not an image." % (textureSlot.texture.name, material.name)))
                 continue
             if textureSlot.texture.image is None:
                 self.report({'WARNING'}, ("Skipping image texture \"%s\" from material: \"%s\" because it has no image." % (textureSlot.texture.name, material.name)))
@@ -258,7 +278,7 @@ def export_json(context, self, filepath, binfilepath):
             continue
         currentLayer = 0
         if material.emit == 0 and 'emissive' in textureMap:
-            self.report({'WARNING'}, ("Ignored emissive texture:\"%s\" from material:\"%s\" because emit factor is 0." % (textureSlots[textureMap['emissive']].name, material.name)))
+            self.report({'WARNING'}, ("Ignored emissive texture: \"%s\" from material:\"%s\" because emit factor is 0." % (textureSlots[textureMap['emissive']].name, material.name)))
         if material.emit != 0:
             materialType = "emissive"
             workDictionary['type'] = materialType
