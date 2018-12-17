@@ -523,31 +523,20 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
     # Materials Header
     binary.extend("Mats".encode())
     materials = bpy.data.materials
-    countOfMaterials = 0
-    layerCount = 0
     materialNames = []
     materialNameLengths = []
+    materialLookup = collections.OrderedDict()  # Lookup for the polygons
     bytePosition = 16
     for i in range(len(materials)):
         material = materials[i]
-        if material.diffuse_shader == "LAMBERT" or material.diffuse_shader == "OREN_NAYAR" or material.diffuse_shader == "FRESNEL":
-            if material.diffuse_intensity != 0:  # ignore if factor == 0
-                layerCount += 1
-        if material.specular_shader == "COOKTORR":
-            if material.specular_intensity != 0:  # ignore if factor == 0
-                layerCount += 1
-        if material.emit != 0:
-            layerCount += 1
-        if layerCount == 0:
-            continue
-        countOfMaterials += 1
+        materialLookup[material.name] = i
         materialNames.append(material.name.encode())
         materialNameLength = len(material.name.encode())
         materialNameLengths.append(materialNameLength.to_bytes(4, byteorder='little'))
         bytePosition += 4 + materialNameLength
 
     binary.extend(bytePosition.to_bytes(8, byteorder='little'))
-    binary.extend(countOfMaterials.to_bytes(4, byteorder='little'))
+    binary.extend(len(materials).to_bytes(4, byteorder='little'))
     for i in range(len(materialNameLengths)):
         binary.extend(materialNameLengths[i])
         binary.extend(materialNames[i])
@@ -607,6 +596,7 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
         binary.extend(objectNameLength.to_bytes(4, byteorder='little'))
         binary.extend(objectName)
         # Write the object flags (NOT compression/deflation, but rather isEmissive etc)
+        objectFlagsBinaryPosition = len(binary)
         objectFlags = 0
         binary.extend(objectFlags.to_bytes(4, byteorder='little'))
         # keyframe
@@ -800,10 +790,18 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
                 matIDDataArray = bytearray()
                 for polygon in mesh.polygons:
                     if len(polygon.vertices) == 3:
-                        matIDDataArray.extend(polygon.material_index.to_bytes(2, byteorder='little'))
+                        matIDDataArray.extend(materialLookup[mesh.materials[polygon.material_index].name].to_bytes(2, byteorder='little'))
                 for polygon in mesh.polygons:
                     if len(polygon.vertices) == 4:
-                        matIDDataArray.extend(polygon.material_index.to_bytes(2, byteorder='little'))
+                        matIDDataArray.extend(materialLookup[mesh.materials[polygon.material_index].name].to_bytes(2, byteorder='little'))
+                if (objectFlags & 1) == 0:
+                    for polygon in mesh.polygons:
+                        if mesh.materials[polygon.material_index].emit > 0.0:
+                            objectFlags |= 1
+                            objectFlagsBin = objectFlags.to_bytes(4, byteorder='little')
+                            for k in range(4):
+                                binary[objectFlagsBinaryPosition + k] = objectFlagsBin[k]
+                            break
                 matIDOutData = matIDDataArray
                 if use_deflation and len(matIDDataArray) > 0:
                     matIDOutData = zlib.compress(matIDDataArray, 8)
@@ -816,7 +814,7 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
                 # Spheres
                 sphereDataArray = bytearray()
                 center = []
-                center.append((boundingBoxMin[0]+boundingBoxMax[0])/2)
+                center.append((boundingBoxMin[0] + boundingBoxMax[0])/2)
                 center.append((boundingBoxMin[1] + boundingBoxMax[1]) / 2)
                 center.append((boundingBoxMin[2] + boundingBoxMax[2]) / 2)
                 radius = abs(boundingBoxMin[0]-(center[0]))
@@ -825,7 +823,14 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
                 sphereDataArray.extend(struct.pack('<f', center[1]))
                 sphereDataArray.extend(struct.pack('<f', radius))
 
-                sphereDataArray.extend(lodObject.active_material_index.to_bytes(2, byteorder='little'))
+                sphereDataArray.extend(materialLookup[lodObject.active_material.name].to_bytes(2, byteorder='little'))
+
+                if (objectFlags & 1) == 0:
+                    if lodObject.active_material.emit > 0.0:
+                        objectFlags |= 1
+                        objectFlagsBin = objectFlags.to_bytes(4, byteorder='little')
+                        for k in range(4):
+                            binary[objectFlagsBinaryPosition + k] = objectFlagsBin[k]
 
                 sphereOutData = sphereDataArray
                 # TODO Sphere Attributes
