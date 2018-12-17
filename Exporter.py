@@ -283,7 +283,10 @@ def export_json(context, self, filepath, binfilepath):
                     workDictionary['roughness'] = finalPath
                 else:
                     workDictionary['roughness'] = (1 - material.specular_alpha)
-                workDictionary['ndf'] = "BS"  # Default normal distribution function TODO: custom property
+                if "ndf" in material:
+                    workDictionary['ndf'] = material["ndf"]
+                else:
+                    workDictionary['ndf'] = "GGX"  # Default normal distribution function
                 absorptionFactor = material.alpha
                 workDictionary['absorption'] = [material.diffuse_color.r * absorptionFactor, material.diffuse_color.g * absorptionFactor, material.diffuse_color.b * absorptionFactor]
                 currentLayer += 1
@@ -329,7 +332,10 @@ def export_json(context, self, filepath, binfilepath):
                         workDictionary['layerRefraction']['roughness'] = finalPath
                     else:
                         workDictionary['layerRefraction']['roughness'] = (1 - material.specular_alpha)
-                    workDictionary['layerRefraction']['ndf'] = "BS"  # Default normal distribution function TODO: custom property
+                    if "ndf" in material:
+                        workDictionary['ndf'] = material["ndf"]
+                    else:
+                        workDictionary['ndf'] = "GGX"  # Default normal distribution function
                     absorptionFactor = material.alpha
                     workDictionary['layerRefraction']['absorption'] = [material.diffuse_color.r*absorptionFactor, material.diffuse_color.g*absorptionFactor, material.diffuse_color.b*absorptionFactor]
                 else:
@@ -379,7 +385,10 @@ def export_json(context, self, filepath, binfilepath):
                     workDictionary['roughness'] = finalPath
                 else:
                     workDictionary['roughness'] = material.specular_hardness / 511  # Max hardness = 511
-                workDictionary['ndf'] = "BS"  # Default normal distribution function TODO: custom property
+                if "ndf" in material:
+                    workDictionary['ndf'] = material["ndf"]
+                else:
+                    workDictionary['ndf'] = "GGX"  # Default normal distribution function
                 currentLayer += 1
                 addedLayer = True
             else:  # Else we have Fresnel and we have to use a default torrance
@@ -399,7 +408,10 @@ def export_json(context, self, filepath, binfilepath):
                     workDictionary['roughness'] = finalPath
                 else:
                     workDictionary['roughness'] = 0  # We could have no roughness parameter so we default to 0
-                workDictionary['ndf'] = "BS"  # Default normal distribution function TODO: custom property
+                if "ndf" in material:
+                    workDictionary['ndf'] = material["ndf"]
+                else:
+                    workDictionary['ndf'] = "GGX"  # Default normal distribution function
                 currentLayer += 1
                 addedLayer = True
             if layerCount != 1:  # if blend Material
@@ -565,7 +577,7 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
         objectFlags = 0
         binary.extend(objectFlags.to_bytes(4, byteorder='little'))
         # keyframe
-        binary.extend((0xFFFFFFFF).to_bytes(4, byteorder='little')) # TODO keyframes
+        binary.extend((0xFFFFFFFF).to_bytes(4, byteorder='little'))  # TODO keyframes
         # OBJID of previous object in animation
         binary.extend((0xFFFFFFFF).to_bytes(4, byteorder='little'))  # TODO keyframes
         # Bounding box
