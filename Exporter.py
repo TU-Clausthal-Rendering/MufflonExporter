@@ -241,7 +241,7 @@ def export_json(context, self, filepath, binfilepath):
             self.report({'WARNING'}, ("Initialised unsupported material: \"%s\" as lambert material." % material.name))
             materialType = "lambert"
             dataDictionary['materials'][material.name]['type'] = materialType
-            dataDictionary['materials'][material.name]['albedo'] = ([material.diffuse_color.r, material.diffuse_color.g, material.diffuse_color.b])
+            dataDictionary['materials'][material.name]['albedo'] = [material.diffuse_color.r, material.diffuse_color.g, material.diffuse_color.b]
             continue
         currentLayer = 0
         if material.emit == 0 and 'emissive' in textureMap:
@@ -255,8 +255,8 @@ def export_json(context, self, filepath, binfilepath):
                 finalPath = finalPath.replace("\\", "/")
                 workDictionary['radiance'] = finalPath
             else:
-                workDictionary['radiance'] = ([material.diffuse_color.r, material.diffuse_color.g, material.diffuse_color.b])
-            workDictionary['scale'] = material.emit
+                workDictionary['radiance'] = [material.diffuse_color.r, material.diffuse_color.g, material.diffuse_color.b]
+            workDictionary['scale'] = [material.emit, material.emit, material.emit]
             currentLayer += 1
             if layerCount != 1:  # if blend Material
                 workDictionary = dataDictionary['materials'][material.name]
@@ -285,7 +285,7 @@ def export_json(context, self, filepath, binfilepath):
                     workDictionary['roughness'] = (1 - material.specular_alpha)
                 workDictionary['ndf'] = "BS"  # Default normal distribution function TODO: custom property
                 absorptionFactor = material.alpha
-                workDictionary['absorption'] = ([material.diffuse_color.r * absorptionFactor, material.diffuse_color.g * absorptionFactor, material.diffuse_color.b * absorptionFactor])
+                workDictionary['absorption'] = [material.diffuse_color.r * absorptionFactor, material.diffuse_color.g * absorptionFactor, material.diffuse_color.b * absorptionFactor]
                 currentLayer += 1
                 addedLayer = True
             elif material.diffuse_shader == "LAMBERT" or unsupportedDiffuse:
@@ -297,7 +297,7 @@ def export_json(context, self, filepath, binfilepath):
                     finalPath = finalPath.replace("\\", "/")
                     workDictionary['albedo'] = finalPath
                 else:
-                    workDictionary['albedo'] = ([material.diffuse_color.r, material.diffuse_color.g, material.diffuse_color.b])
+                    workDictionary['albedo'] = [material.diffuse_color.r, material.diffuse_color.g, material.diffuse_color.b]
                 currentLayer += 1
                 addedLayer = True
             elif material.diffuse_shader == "OREN_NAYAR":
@@ -309,7 +309,7 @@ def export_json(context, self, filepath, binfilepath):
                     finalPath = finalPath.replace("\\", "/")
                     workDictionary['albedo'] = finalPath
                 else:
-                    workDictionary['albedo'] = ([material.diffuse_color.r, material.diffuse_color.g, material.diffuse_color.b])
+                    workDictionary['albedo'] = [material.diffuse_color.r, material.diffuse_color.g, material.diffuse_color.b]
                 workDictionary['roughness'] = material.roughness # blender is from 0 to pi and in the specifications to pi/2 but pi is ok
                 currentLayer += 1
                 addedLayer = True
@@ -331,7 +331,7 @@ def export_json(context, self, filepath, binfilepath):
                         workDictionary['layerRefraction']['roughness'] = (1 - material.specular_alpha)
                     workDictionary['layerRefraction']['ndf'] = "BS"  # Default normal distribution function TODO: custom property
                     absorptionFactor = material.alpha
-                    workDictionary['layerRefraction']['absorption'] = ([material.diffuse_color.r*absorptionFactor, material.diffuse_color.g*absorptionFactor, material.diffuse_color.b*absorptionFactor])
+                    workDictionary['layerRefraction']['absorption'] = [material.diffuse_color.r*absorptionFactor, material.diffuse_color.g*absorptionFactor, material.diffuse_color.b*absorptionFactor]
                 else:
                     materialType = "lambert"
                     workDictionary['layerRefraction']['type'] = materialType
@@ -341,7 +341,7 @@ def export_json(context, self, filepath, binfilepath):
                         finalPath = finalPath.replace("\\", "/")
                         workDictionary['layerRefraction']['albedo'] = finalPath
                     else:
-                        workDictionary['layerRefraction']['albedo'] = ([material.diffuse_color.r, material.diffuse_color.g, material.diffuse_color.b])
+                        workDictionary['layerRefraction']['albedo'] = [material.diffuse_color.r, material.diffuse_color.g, material.diffuse_color.b]
                 if 'layerReflection' not in workDictionary:
                     workDictionary['layerReflection'] = collections.OrderedDict()
                 workDictionary = workDictionary['layerReflection']
@@ -371,7 +371,7 @@ def export_json(context, self, filepath, binfilepath):
                     finalPath = finalPath.replace("\\", "/")
                     workDictionary['albedo'] = finalPath
                 else:
-                    workDictionary['albedo'] = ([material.specular_color.r, material.specular_color.g, material.specular_color.b])
+                    workDictionary['albedo'] = [material.specular_color.r, material.specular_color.g, material.specular_color.b]
                 if 'roughness' in textureMap:
                     absPath = bpy.path.abspath(textureSlots[textureMap['roughness']].texture.image.filepath)
                     finalPath = os.path.relpath(absPath, os.path.dirname(filepath))
@@ -391,7 +391,7 @@ def export_json(context, self, filepath, binfilepath):
                     finalPath = finalPath.replace("\\", "/")
                     workDictionary['albedo'] = finalPath
                 else:
-                    workDictionary['albedo'] = ([material.specular_color.r, material.specular_color.g, material.specular_color.b])
+                    workDictionary['albedo'] = [material.specular_color.r, material.specular_color.g, material.specular_color.b]
                 if 'roughness' in textureMap:
                     absPath = bpy.path.abspath(textureSlots[textureMap['roughness']].texture.image.filepath)
                     finalPath = os.path.relpath(absPath, os.path.dirname(filepath))
