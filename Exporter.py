@@ -738,19 +738,17 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
                             uvCoordinates[mesh.loops[loop_index].vertex_index] = uv_layer[loop_index].uv
                 vertexDataArray = bytearray()  # Used for deflation
                 for k in range(len(vertices)):
-                    vertex = mesh.vertices[k]
-                    coordinates = vertex.co
-                    vertexDataArray.extend(struct.pack('<f', coordinates[0]))
-                    vertexDataArray.extend(struct.pack('<f', coordinates[2]))
-                    vertexDataArray.extend(struct.pack('<f', coordinates[1]))
-                    normal = vertex.normal
+                    vertexDataArray.extend(struct.pack('<f', mesh.vertices[k].co[0]))
+                    vertexDataArray.extend(struct.pack('<f', mesh.vertices[k].co[2]))
+                    vertexDataArray.extend(struct.pack('<f', mesh.vertices[k].co[1]))
+                for k in range(len(vertices)):
                     if use_compression:
-                        vertexDataArray.extend(pack_normal32(normal).to_bytes(4, byteorder='little'))
+                        vertexDataArray.extend(pack_normal32(mesh.vertices[k].normal).to_bytes(4, byteorder='little'))
                     else:
-                        vertexDataArray.extend(struct.pack('<f', normal[0]))
-                        vertexDataArray.extend(struct.pack('<f', normal[2]))
-                        vertexDataArray.extend(struct.pack('<f', normal[1]))
-                    # uv
+                        vertexDataArray.extend(struct.pack('<f', mesh.vertices[k].normal[0]))
+                        vertexDataArray.extend(struct.pack('<f', mesh.vertices[k].normal[2]))
+                        vertexDataArray.extend(struct.pack('<f', mesh.vertices[k].normal[1]))
+                for k in range(len(vertices)):
                     vertexDataArray.extend(struct.pack('<f', uvCoordinates[k][0]))
                     vertexDataArray.extend(struct.pack('<f', uvCoordinates[k][1]))
                 vertexOutData = vertexDataArray
