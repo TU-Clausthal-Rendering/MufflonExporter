@@ -610,6 +610,9 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
     materialNameLengths = []
     materialLookup = collections.OrderedDict()  # Lookup for the polygons
     bytePosition = 16
+    if len(materials) == 0:
+        self.report({'ERROR'}, ("There are no materials in the scene."))
+        return -1
     for i in range(len(materials)):
         material = materials[i]
         materialLookup[material.name] = i
@@ -798,6 +801,7 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
             # Number of Edges
             binary.extend(numberOfEdges.to_bytes(4, byteorder='little'))
             # Number of Vertex Attributes
+            numberOfVertexAttributesBinaryPosition = len(binary)  # has to be corrected when value is known
             binary.extend(numberOfVertexAttributes.to_bytes(4, byteorder='little'))
             # Number of Face Attributes
             binary.extend(numberOfFaceAttributes.to_bytes(4, byteorder='little'))
@@ -815,10 +819,10 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
                         arctan2 = numpy.arctan2(vertices[k].co[2], vertices[k].co[0])
                         uvCoordinates[k] = [acos, arctan2]
                 else:
-                    uv_layer = mesh.uv_layers.active.data
+                    uv_layer = mesh.uv_layers[0]
                     for polygon in mesh.polygons:
                         for loop_index in range(polygon.loop_start, polygon.loop_start + polygon.loop_total):
-                            uvCoordinates[mesh.loops[loop_index].vertex_index] = uv_layer[loop_index].uv
+                            uvCoordinates[mesh.loops[loop_index].vertex_index] = uv_layer.data[loop_index].uv
                 vertexDataArray = bytearray()  # Used for deflation
                 for k in range(len(vertices)):
                     vertexDataArray.extend(struct.pack('<f', mesh.vertices[k].co[0]))
@@ -841,8 +845,78 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
                     binary.extend(len(vertexDataArray).to_bytes(4, byteorder='little'))
                 binary.extend(vertexOutData)
 
-                # Attributes
-                # TODO Attributes (with deflation)
+                # Vertex Attributes
+                vertexAttributesDataArray = bytearray()  # Used for deflation
+                for uvNumber in range(len(mesh.uv_layers)):  # get Number of Vertex Attributes
+                    if uvNumber == 0:
+                        continue
+                    uv_layer = mesh.uv_layers[uvNumber]
+                    if not uv_layer:
+                        continue
+                    numberOfVertexAttributes += 1
+                for colorNumber in range(len(mesh.vertex_colors)):
+                    vertex_color = mesh.vertex_colors[colorNumber]
+                    if not vertex_color:
+                        continue
+                    numberOfVertexAttributes += 1
+
+                if numberOfVertexAttributes > 0:
+                    numberOfVertexAttributesBin = numberOfVertexAttributes.to_bytes(4, byteorder='little')
+                    for k in range(4):
+                        binary[numberOfVertexAttributesBinaryPosition + k] = numberOfVertexAttributesBin[k]
+
+                    binary.extend("Attr".encode())
+                    for uvNumber in range(len(mesh.uv_layers)):
+                        if uvNumber == 0:
+                            continue
+                        uvCoordinates = numpy.empty(len(vertices), dtype=object)
+                        uv_layer = mesh.uv_layers[uvNumber]
+                        if not uv_layer:
+                            continue
+                        uvName = uv_layer.name
+                        vertexAttributesDataArray.extend(len(uvName.encode()).to_bytes(4, byteorder='little'))
+                        vertexAttributesDataArray.extend(uvName.encode())
+                        vertexAttributesDataArray.extend((0).to_bytes(4, byteorder='little'))  # No meta information
+                        vertexAttributesDataArray.extend((0).to_bytes(4, byteorder='little'))  # No meta information
+                        vertexAttributesDataArray.extend((16).to_bytes(4, byteorder='little'))  # Type: 2*f32 (16)
+                        vertexAttributesDataArray.extend((len(vertices)*4*2).to_bytes(8, byteorder='little'))  # Count of Bytes len(vertices) * 4(f32) * 2(uvCoordinates per vertex)
+                        for polygon in mesh.polygons:
+                            for loop_index in range(polygon.loop_start, polygon.loop_start + polygon.loop_total):
+                                uvCoordinates[mesh.loops[loop_index].vertex_index] = uv_layer.data[loop_index].uv
+                        for k in range(len(vertices)):
+                            vertexAttributesDataArray.extend(struct.pack('<f', uvCoordinates[k][0]))
+                            vertexAttributesDataArray.extend(struct.pack('<f', uvCoordinates[k][1]))
+                    for colorNumber in range(len(mesh.vertex_colors)):
+                        vertexColor = numpy.empty(len(vertices), dtype=object)
+                        vertex_color_layer = mesh.vertex_colors[colorNumber]
+                        if not vertex_color_layer:
+                            continue
+                        colorName = vertex_color_layer.name
+                        vertexAttributesDataArray.extend(len(colorName.encode()).to_bytes(4, byteorder='little'))
+                        vertexAttributesDataArray.extend(colorName.encode())
+                        vertexAttributesDataArray.extend((0).to_bytes(4, byteorder='little'))  # No meta information
+                        vertexAttributesDataArray.extend((0).to_bytes(4, byteorder='little'))  # No meta information
+                        vertexAttributesDataArray.extend((17).to_bytes(4, byteorder='little'))  # Type: 3*f32 (17)
+                        vertexAttributesDataArray.extend((len(vertices)*4*3).to_bytes(8, byteorder='little'))  # Count of Bytes len(vertices) * 4(f32) * 3(color channels per vertex)
+                        for polygon in mesh.polygons:
+                            for loop_index in range(polygon.loop_start, polygon.loop_start + polygon.loop_total):
+                                vertexColor[mesh.loops[loop_index].vertex_index] = vertex_color_layer.data[loop_index].color
+                        for k in range(len(vertices)):
+                            vertexAttributesDataArray.extend(struct.pack('<f', vertexColor[k][0]))
+                            vertexAttributesDataArray.extend(struct.pack('<f', vertexColor[k][1]))
+                            vertexAttributesDataArray.extend(struct.pack('<f', vertexColor[k][2]))
+
+
+                vertexAttributesOutData = vertexAttributesDataArray
+                if use_deflation and len(vertexAttributesDataArray) > 0:
+                    vertexAttributesOutData = zlib.compress(vertexAttributesDataArray, 8)
+                    binary.extend(len(vertexAttributesOutData).to_bytes(4, byteorder='little'))
+                    binary.extend(len(vertexAttributesDataArray).to_bytes(4, byteorder='little'))
+                binary.extend(vertexAttributesOutData)
+
+
+
+                # TODO more Vertex Attributes? (with deflation)
                 # Triangles
                 triangleDataArray = bytearray()  # Used for deflation
                 for polygon in mesh.polygons:
@@ -869,20 +943,36 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
                 binary.extend(quadOutData)
                 # Material IDs
                 matIDDataArray = bytearray()
+                if len(mesh.materials) == 0:
+                    self.report({'WARNING'}, ("LOD Object: \"%s\" has no materials." % (lodObject.name)))
                 for polygon in mesh.polygons:
                     if len(polygon.vertices) == 3:
-                        matIDDataArray.extend(materialLookup[mesh.materials[polygon.material_index].name].to_bytes(2, byteorder='little'))
+                        if len(mesh.materials) != 0:
+                            matIDDataArray.extend(materialLookup[mesh.materials[polygon.material_index].name].to_bytes(2, byteorder='little'))
+                        else:
+                            matIDDataArray.extend((0).to_bytes(2, byteorder='little'))
                 for polygon in mesh.polygons:
                     if len(polygon.vertices) == 4:
-                        matIDDataArray.extend(materialLookup[mesh.materials[polygon.material_index].name].to_bytes(2, byteorder='little'))
+                        if len(mesh.materials) != 0:
+                            matIDDataArray.extend(materialLookup[mesh.materials[polygon.material_index].name].to_bytes(2, byteorder='little'))
+                        else:
+                            matIDDataArray.extend((0).to_bytes(2, byteorder='little')) # first material is default when the object has no mats
                 if (objectFlags & 1) == 0:
-                    for polygon in mesh.polygons:
-                        if mesh.materials[polygon.material_index].emit > 0.0:
-                            objectFlags |= 1
-                            objectFlagsBin = objectFlags.to_bytes(4, byteorder='little')
-                            for k in range(4):
-                                binary[objectFlagsBinaryPosition + k] = objectFlagsBin[k]
-                            break
+                    if len(mesh.materials) != 0:
+                        for polygon in mesh.polygons:
+                            if len(mesh.materials) != 0:
+                                if mesh.materials[polygon.material_index].emit > 0.0:
+                                    objectFlags |= 1
+                                    objectFlagsBin = objectFlags.to_bytes(4, byteorder='little')
+                                    for k in range(4):
+                                        binary[objectFlagsBinaryPosition + k] = objectFlagsBin[k]
+                                    break
+                else:
+                    if materials[0] > 0.0:  # first material is default when the object has no mats
+                        objectFlags |= 1
+                        objectFlagsBin = objectFlags.to_bytes(4, byteorder='little')
+                        for k in range(4):
+                            binary[objectFlagsBinaryPosition + k] = objectFlagsBin[k]
                 matIDOutData = matIDDataArray
                 if use_deflation and len(matIDDataArray) > 0:
                     matIDOutData = zlib.compress(matIDDataArray, 8)
