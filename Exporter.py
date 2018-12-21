@@ -34,6 +34,17 @@ def export_json(context, self, filepath, binfilepath):
     dataDictionary['lights'] = collections.OrderedDict()
     dataDictionary['materials'] = collections.OrderedDict()
     dataDictionary['scenarios'] = collections.OrderedDict()
+
+    materialKeys = ["type", "albedo", "roughness", "ndf", "absorption", "radiance", "scale", "refractionIndex", "factorA", "factorB", "layerA", "layerB", "layerReflection", "layerRefraction"]
+    lambertKeys = ["type", "albedo"]
+    torranceKeys = ["type", "albedo", "roughness", "ndf"]
+    walterKeys = ["type", "roughness", "ndf", "absorption"]
+    emissiveKeys = ["type", "radiance", "scale"]
+    orennayarKeys = ["type", "albedo", "roughness"]
+    blendKeys = ["type", "layerA", "layerB", "factorA", "factorB"]
+    fresnelKeys = ["type", "layerReflection", "layerRefraction", "refractionIndex"]
+
+
     if os.path.isfile(filepath):
         file = open(filepath, 'r')
         jsonStr = file.read()
@@ -167,21 +178,22 @@ def export_json(context, self, filepath, binfilepath):
             continue
     world = scn.world
     worldTextureSlot = world.texture_slots[world.active_texture_index]
-    if worldTextureSlot.texture is not None:
-        if worldTextureSlot.texture.type != "IMAGE":
-            self.report({'WARNING'}, ("Skipping environment map: \"%s\" because it is not an image." % worldTextureSlot.texture.name))
-        else:
-            if worldTextureSlot.texture.image is None:
-                self.report({'WARNING'}, ("Skipping environment map: \"%s\" because it has no image." % worldTextureSlot.texture.name))
+    if worldTextureSlot is not None:
+        if worldTextureSlot.texture is not None:
+            if worldTextureSlot.texture.type != "IMAGE":
+                self.report({'WARNING'}, ("Skipping environment map: \"%s\" because it is not an image." % worldTextureSlot.texture.name))
             else:
-                dataDictionary['lights'][worldTextureSlot.texture.name] = collections.OrderedDict()
-                absPath = bpy.path.abspath(worldTextureSlot.texture.image.filepath)
-                finalPath = os.path.relpath(absPath, os.path.dirname(filepath))
-                finalPath = finalPath.replace("\\", "/")
-                lightType = "envmap"
-                dataDictionary['lights'][worldTextureSlot.texture.name]["type"] = lightType
-                dataDictionary['lights'][worldTextureSlot.texture.name]["map"] = finalPath
-                dataDictionary['lights'][worldTextureSlot.texture.name]["scale"] = worldTextureSlot.horizon_factor
+                if worldTextureSlot.texture.image is None:
+                    self.report({'WARNING'}, ("Skipping environment map: \"%s\" because it has no image." % worldTextureSlot.texture.name))
+                else:
+                    dataDictionary['lights'][worldTextureSlot.texture.name] = collections.OrderedDict()
+                    absPath = bpy.path.abspath(worldTextureSlot.texture.image.filepath)
+                    finalPath = os.path.relpath(absPath, os.path.dirname(filepath))
+                    finalPath = finalPath.replace("\\", "/")
+                    lightType = "envmap"
+                    dataDictionary['lights'][worldTextureSlot.texture.name]["type"] = lightType
+                    dataDictionary['lights'][worldTextureSlot.texture.name]["map"] = finalPath
+                    dataDictionary['lights'][worldTextureSlot.texture.name]["scale"] = worldTextureSlot.horizon_factor
 
     # Materials
 
@@ -264,6 +276,12 @@ def export_json(context, self, filepath, binfilepath):
         elif layerCount > 1:
             materialDepth = 1
             materialType = "blend"
+            keysToRetain = blendKeys
+            for key in materialKeys:
+                if key not in keysToRetain:
+                    if dataDictionary['materials'][material.name]:
+                        if key in dataDictionary['materials'][material.name]:
+                            dataDictionary['materials'][material.name].pop(key)  # Delete Keys from Dict
             dataDictionary['materials'][material.name]['type'] = materialType
             if 'layerA' not in dataDictionary['materials'][material.name]:
                 dataDictionary['materials'][material.name]['layerA'] = collections.OrderedDict()
@@ -273,6 +291,12 @@ def export_json(context, self, filepath, binfilepath):
         else:
             self.report({'WARNING'}, ("Initialised unsupported material: \"%s\" as lambert material." % material.name))
             materialType = "lambert"
+            keysToRetain = lambertKeys
+            for key in materialKeys:
+                if key not in keysToRetain:
+                    if dataDictionary['materials'][material.name]:
+                        if key in dataDictionary['materials'][material.name]:
+                            dataDictionary['materials'][material.name].pop(key)  # Delete Keys from Dict
             dataDictionary['materials'][material.name]['type'] = materialType
             dataDictionary['materials'][material.name]['albedo'] = [material.diffuse_color.r, material.diffuse_color.g, material.diffuse_color.b]
             continue
@@ -281,6 +305,12 @@ def export_json(context, self, filepath, binfilepath):
             self.report({'WARNING'}, ("Ignored emissive texture: \"%s\" from material:\"%s\" because emit factor is 0." % (textureSlots[textureMap['emissive']].name, material.name)))
         if material.emit != 0:
             materialType = "emissive"
+            keysToRetain = emissiveKeys
+            for key in materialKeys:
+                if key not in keysToRetain:
+                    if workDictionary:
+                        if key in workDictionary:
+                            workDictionary.pop(key)  # Delete Keys from Dict
             workDictionary['type'] = materialType
             if 'emissive' in textureMap:
                 absPath = bpy.path.abspath(textureSlots[textureMap['emissive']].texture.image.filepath)
@@ -299,6 +329,12 @@ def export_json(context, self, filepath, binfilepath):
                 if layerCount - currentLayer > 1:  # if we need an additional layer pair
                     materialDepth += 1
                     materialType = "blend"
+                    keysToRetain = blendKeys
+                    for key in materialKeys:
+                        if key not in keysToRetain:
+                            if workDictionary:
+                                if key in workDictionary:
+                                    workDictionary.pop(key)  # Delete Keys from Dict
                     workDictionary['type'] = materialType
                     if 'layerA' not in workDictionary:
                         workDictionary['layerA'] = collections.OrderedDict()
@@ -308,6 +344,12 @@ def export_json(context, self, filepath, binfilepath):
         if not ignoreDiffuse:
             if useWalter and material.diffuse_shader != "FRESNEL":  # if Fresnel do a fresnel material otherwise walter
                 materialType = "walter"
+                keysToRetain = walterKeys
+                for key in materialKeys:
+                    if key not in keysToRetain:
+                        if workDictionary:
+                            if key in workDictionary:
+                                workDictionary.pop(key)   # Delete Keys from Dict
                 workDictionary['type'] = materialType
                 if 'roughness' in textureMap:
                     absPath = bpy.path.abspath(textureSlots[textureMap['roughness']].texture.image.filepath)
@@ -326,6 +368,12 @@ def export_json(context, self, filepath, binfilepath):
                 addedLayer = True
             elif material.diffuse_shader == "LAMBERT" or unsupportedDiffuse:
                 materialType = "lambert"
+                keysToRetain = lambertKeys
+                for key in materialKeys:
+                    if key not in keysToRetain:
+                        if workDictionary:
+                            if key in workDictionary:
+                                workDictionary.pop(key)  # Delete Keys from Dict
                 workDictionary['type'] = materialType
                 if 'diffuse' in textureMap:
                     absPath = bpy.path.abspath(textureSlots[textureMap['diffuse']].texture.image.filepath)
@@ -338,6 +386,12 @@ def export_json(context, self, filepath, binfilepath):
                 addedLayer = True
             elif material.diffuse_shader == "OREN_NAYAR":
                 materialType = "orennayar"
+                keysToRetain = orennayarKeys
+                for key in materialKeys:
+                    if key not in keysToRetain:
+                        if workDictionary:
+                            if key in workDictionary:
+                                workDictionary.pop(key)  # Delete Keys from Dict
                 workDictionary['type'] = materialType
                 if 'diffuse' in textureMap:
                     absPath = bpy.path.abspath(textureSlots[textureMap['diffuse']].texture.image.filepath)
@@ -346,17 +400,29 @@ def export_json(context, self, filepath, binfilepath):
                     workDictionary['albedo'] = finalPath
                 else:
                     workDictionary['albedo'] = [material.diffuse_color.r, material.diffuse_color.g, material.diffuse_color.b]
-                workDictionary['roughness'] = material.roughness # blender is from 0 to pi and in the specifications to pi/2 but pi is ok
+                workDictionary['roughness'] = material.roughness  # blender is from 0 to pi and in the specifications to pi/2 but pi is ok
                 currentLayer += 1
                 addedLayer = True
             elif material.diffuse_shader == "FRESNEL":
                 materialType = "fresnel"
+                keysToRetain = fresnelKeys
+                for key in materialKeys:
+                    if key not in keysToRetain:
+                        if workDictionary:
+                            if key in workDictionary:
+                                workDictionary.pop(key)  # Delete Keys from Dict
                 workDictionary['type'] = materialType
                 workDictionary['refractionIndex'] = material.diffuse_fresnel
                 if 'layerRefraction' not in workDictionary:
                     workDictionary['layerRefraction'] = collections.OrderedDict()
                 if useWalter:
                     materialType = "walter"
+                    keysToRetain = walterKeys
+                    for key in materialKeys:
+                        if key not in keysToRetain:
+                            if workDictionary['layerRefraction']:
+                                if key in workDictionary['layerRefraction']:
+                                    workDictionary['layerRefraction'].pop(key)  # Delete Keys from Dict
                     workDictionary['layerRefraction']['type'] = materialType
                     if 'roughness' in textureMap:
                         absPath = bpy.path.abspath(textureSlots[textureMap['roughness']].texture.image.filepath)
@@ -373,6 +439,12 @@ def export_json(context, self, filepath, binfilepath):
                     workDictionary['layerRefraction']['absorption'] = [material.diffuse_color.r*absorptionFactor, material.diffuse_color.g*absorptionFactor, material.diffuse_color.b*absorptionFactor]
                 else:
                     materialType = "lambert"
+                    keysToRetain = lambertKeys
+                    for key in materialKeys:
+                        if key not in keysToRetain:
+                            if workDictionary['layerRefraction']:
+                                if key in workDictionary['layerRefraction']:
+                                    workDictionary['layerRefraction'].pop(key)  # Delete Keys from Dict
                     workDictionary['layerRefraction']['type'] = materialType
                     if 'diffuse' in textureMap:
                         absPath = bpy.path.abspath(textureSlots[textureMap['diffuse']].texture.image.filepath)
@@ -403,6 +475,12 @@ def export_json(context, self, filepath, binfilepath):
         if not ignoreSpecular:
             if material.specular_shader == "COOKTORR":
                 materialType = "torrance"
+                keysToRetain = torranceKeys
+                for key in materialKeys:
+                    if key not in keysToRetain:
+                        if workDictionary:
+                            if key in workDictionary:
+                                workDictionary.pop(key)  # Delete Keys from Dict
                 workDictionary['type'] = materialType
                 if 'specular' in textureMap:
                     absPath = bpy.path.abspath(textureSlots[textureMap['specular']].texture.image.filepath)
@@ -424,8 +502,14 @@ def export_json(context, self, filepath, binfilepath):
                     workDictionary['ndf'] = "GGX"  # Default normal distribution function
                 currentLayer += 1
                 addedLayer = True
-            else:  # Else we have Fresnel and we have to use a default torrance
+            else:  # Else we have Fresnel and we have to use a default specular material because ther is no defined
                 materialType = "torrance"
+                keysToRetain = torranceKeys
+                for key in materialKeys:
+                    if key not in keysToRetain:
+                        if workDictionary:
+                            if key in workDictionary:
+                                workDictionary.pop(key)  # Delete Keys from Dict
                 workDictionary['type'] = materialType
                 if 'specular' in textureMap:
                     absPath = bpy.path.abspath(textureSlots[textureMap['specular']].texture.image.filepath)
@@ -500,7 +584,6 @@ def export_json(context, self, filepath, binfilepath):
     # Object properties
     if 'objectProperties' not in dataDictionary['scenarios'][scn.name]:
         dataDictionary['scenarios'][scn.name]['objectProperties'] = collections.OrderedDict()
-    # TODO objectProperties
 
     # To reduce float precision it is necessary to do the store->load->store (even if it is ugly)
     dump = json.dumps(json.loads(json.dumps(dataDictionary, indent=4), object_pairs_hook=OrderedDict, parse_float=lambda x: round(float(x), 3)), indent=4)
@@ -753,7 +836,7 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
                     vertexDataArray.extend(struct.pack('<f', uvCoordinates[k][1]))
                 vertexOutData = vertexDataArray
                 if use_deflation and len(vertexDataArray) > 0:
-                    vertexOutData = zlib.compress(vertexDataArray, 8)  # TODO deflate algorithm doesn't do what we want it to do
+                    vertexOutData = zlib.compress(vertexDataArray, 8)
                     binary.extend(len(vertexOutData).to_bytes(4, byteorder='little'))
                     binary.extend(len(vertexDataArray).to_bytes(4, byteorder='little'))
                 binary.extend(vertexOutData)
