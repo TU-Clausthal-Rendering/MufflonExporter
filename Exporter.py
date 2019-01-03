@@ -10,6 +10,7 @@ import math
 import zlib
 from collections import OrderedDict
 import re
+from inspect import currentframe, getframeinfo
 
 bl_info = {
     "name": "Mufflon Exporter",
@@ -98,6 +99,9 @@ def export_json(context, self, filepath, binfilepath):
         viewDirectionPath = []
         upPath = []
         if camera.animation_data:  # TODO Check if this works
+            frameinfo = getframeinfo(currentframe())
+            self.report({'WARNING'},
+                        "Using not tested code for animated camera: line %d." % frameinfo.lineno)
             x_curve = camera.animation_data.action.fcurves.find('location', index=0)
             y_curve = camera.animation_data.action.fcurves.find('location', index=1)
             z_curve = camera.animation_data.action.fcurves.find('location', index=2)
@@ -105,7 +109,7 @@ def export_json(context, self, filepath, binfilepath):
                 x_pos = x_curve.evaluate(f)
                 y_pos = y_curve.evaluate(f)
                 z_pos = z_curve.evaluate(f)
-                cameraPath.append([x_pos, z_pos , y_pos])
+                cameraPath.append([x_pos, z_pos, y_pos])
         else:  # for not animated Cameras
             cameraPath.append([cameraObject.location.x, cameraObject.location.z, cameraObject.location.y])
             viewDirection = cameraObject.matrix_world.to_quaternion() * Vector((0.0, 0.0, -1.0))
@@ -777,7 +781,7 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
             numberOfSpheres = 0
             numberOfVertices = len(mesh.vertices)
             numberOfEdges = len(mesh.edges)
-            numberOfVertexAttributes = 0  # TODO Vertex Attributes
+            numberOfVertexAttributes = 0
             numberOfFaceAttributes = 0  # TODO Face Attributes
             numberOfSphereAttributes = 0
             if "sphere" in lodObject: # Change Values if it is an sphere
@@ -906,15 +910,12 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
                             vertexAttributesDataArray.extend(struct.pack('<f', vertexColor[k][1]))
                             vertexAttributesDataArray.extend(struct.pack('<f', vertexColor[k][2]))
 
-
                 vertexAttributesOutData = vertexAttributesDataArray
                 if use_deflation and len(vertexAttributesDataArray) > 0:
                     vertexAttributesOutData = zlib.compress(vertexAttributesDataArray, 8)
                     binary.extend(len(vertexAttributesOutData).to_bytes(4, byteorder='little'))
                     binary.extend(len(vertexAttributesDataArray).to_bytes(4, byteorder='little'))
                 binary.extend(vertexAttributesOutData)
-
-
 
                 # TODO more Vertex Attributes? (with deflation)
                 # Triangles
