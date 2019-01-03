@@ -594,9 +594,7 @@ def export_json(context, self, filepath, binfilepath):
 
     vectorOccurrences = re.findall(r"[[](?:\s*-?\d+(?:\.\d+)?,){0,3}\s*-?\d+(?:\.\d+)?,?\s*[\]]", dump)  # Find Vec1-4 with regular expression
     for vec in vectorOccurrences:
-        print(vec)
         shortVector3 = re.sub(r"\s+", " ", vec)  # Shorten it
-        print(shortVector3)
         dump = dump.replace(vec, shortVector3)
     file = open(filepath, 'w')
     file.write(dump)
@@ -647,7 +645,10 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
     binary.extend(flags.to_bytes(4, byteorder='little'))
 
     countOfObjects = 0
-    objects = bpy.data.objects
+    if use_selection:
+        objects = bpy.context.selected_objects
+    else:
+        objects = bpy.data.objects
 
     for i in range(len(objects)):
         if objects[i].type != "MESH":
