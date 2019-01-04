@@ -570,14 +570,10 @@ def export_json(context, self, filepath, binfilepath):
 
     dataDictionary['scenarios'][scn.name]['camera'] = cameraName
     dataDictionary['scenarios'][scn.name]['resolution'] = [scn.render.resolution_x, scn.render.resolution_y]
-    lamps = [o for o in bpy.data.objects if o.type == 'LAMP']
-    lights = []
-    for i in range(len(lamps)):
-        lamp = lamps[i].data
-        if lamp.type == "POINT" or lamp.type == "SUN" or lamp.type == "SPOT":
-            lights.append(lamp.name)
-
-    dataDictionary['scenarios'][scn.name]['lights'] = lights
+    lightNames = []
+    for light in dataDictionary['lights']:
+        lightNames.append(light)
+    dataDictionary['scenarios'][scn.name]['lights'] = lightNames
     dataDictionary['scenarios'][scn.name]['lod'] = 0
     # Material assignments
     if 'materialAssignments' not in dataDictionary['scenarios'][scn.name]:
