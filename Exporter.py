@@ -22,6 +22,10 @@ bl_info = {
     "category": "Import-Export"
 }
 
+# Blender has: up = z, but target is: up = y
+def flip_space(vec):
+    return [vec[0], vec[2], -vec[1]]
+
 def export_json(context, self, filepath, binfilepath):
     version = "1.0"
     binary = os.path.relpath(binfilepath, os.path.commonpath([filepath, binfilepath]))
@@ -106,16 +110,14 @@ def export_json(context, self, filepath, binfilepath):
             y_curve = camera.animation_data.action.fcurves.find('location', index=1)
             z_curve = camera.animation_data.action.fcurves.find('location', index=2)
             for f in range(scn.frame_start, scn.frame_end):
-                x_pos = x_curve.evaluate(f)
-                y_pos = y_curve.evaluate(f)
-                z_pos = z_curve.evaluate(f)
-                cameraPath.append([x_pos, z_pos, y_pos])
+                pos = (x_curve.evaluate(f), y_curve.evaluate(f), z_curve.evaluate(f))
+                cameraPath.append(flip_space(pos))
         else:  # for not animated Cameras
-            cameraPath.append([cameraObject.location.x, cameraObject.location.z, cameraObject.location.y])
-            viewDirection = cameraObject.matrix_world.to_quaternion() * Vector((0.0, 0.0, -1.0))
-            viewDirectionPath.append([viewDirection.x, viewDirection.z, viewDirection.y])
+            cameraPath.append(flip_space(cameraObject.location))
+            viewDirection = cameraObject.matrix_world.to_quaternion() * Vector((0.0, 0.0, -1.0)) # TODO why convert to quaternion (very slow)? Does conversion include more than rotation (if yes this is a problem)?
+            viewDirectionPath.append(flip_space(viewDirection))
             up = cameraObject.matrix_world.to_quaternion() * Vector((0.0, 1.0, 0.0))
-            upPath.append([up.x, up.z, up.y])
+            upPath.append(flip_space(up))
         dataDictionary['cameras'][camera.name]['path'] = cameraPath
         dataDictionary['cameras'][camera.name]['viewDir'] = viewDirectionPath
         dataDictionary['cameras'][camera.name]['up'] = upPath
@@ -143,7 +145,7 @@ def export_json(context, self, filepath, binfilepath):
                     else:
                         lightType = "goniometric"
                         dataDictionary['lights'][lamp.name]['type'] = lightType
-                        dataDictionary['lights'][lamp.name]['position'] = [lampObject.location.x, lampObject.location.z, lampObject.location.y]
+                        dataDictionary['lights'][lamp.name]['position'] = flip_space(lampObject.location)
                         absPath = bpy.path.abspath(lampTextureSlot.texture.image.filepath)
                         finalPath = os.path.relpath(absPath, os.path.dirname(filepath))
                         finalPath = finalPath.replace("\\", "/")
@@ -152,7 +154,7 @@ def export_json(context, self, filepath, binfilepath):
             else:
                 lightType = "point"
                 dataDictionary['lights'][lamp.name]['type'] = lightType
-                dataDictionary['lights'][lamp.name]['position'] = [lampObject.location.x, lampObject.location.z, lampObject.location.y]
+                dataDictionary['lights'][lamp.name]['position'] = flip_space(lampObject.location)
                 dataDictionary['lights'][lamp.name]['intensity'] = [lamp.color.r, lamp.color.g, lamp.color.b]
                 dataDictionary['lights'][lamp.name]['scale'] = lamp.energy
         elif lamp.type == "SUN":
@@ -160,8 +162,8 @@ def export_json(context, self, filepath, binfilepath):
                 dataDictionary['lights'][lamp.name] = collections.OrderedDict()
             lightType = "directional"
             dataDictionary['lights'][lamp.name]['type'] = lightType
-            viewDirection = lampObject.matrix_world.to_quaternion() * Vector((0.0, 0.0, -1.0))
-            dataDictionary['lights'][lamp.name]['direction'] = [viewDirection.x, viewDirection.z, viewDirection.y]
+            viewDirection = lampObject.matrix_world.to_quaternion() * Vector((0.0, 0.0, -1.0)) # TODO again: why quaternion?
+            dataDictionary['lights'][lamp.name]['direction'] = flip_space(viewDirection)
             dataDictionary['lights'][lamp.name]['radiance'] = [lamp.color.r, lamp.color.g, lamp.color.b]
             dataDictionary['lights'][lamp.name]['scale'] = lamp.energy
         elif lamp.type == "SPOT":
@@ -169,9 +171,9 @@ def export_json(context, self, filepath, binfilepath):
                 dataDictionary['lights'][lamp.name] = collections.OrderedDict()
             lightType = "spot"
             dataDictionary['lights'][lamp.name]['type'] = lightType
-            dataDictionary['lights'][lamp.name]['position'] = [lampObject.location.x, lampObject.location.z, lampObject.location.y]
+            dataDictionary['lights'][lamp.name]['position'] = flip_space(lampObject.location)
             lightDirection = lampObject.matrix_world.to_quaternion() * Vector((0.0, 0.0, -1.0))
-            dataDictionary['lights'][lamp.name]['direction'] = [lightDirection.x, lightDirection.z, lightDirection.y]
+            dataDictionary['lights'][lamp.name]['direction'] = flip_space(lightDirection)
             dataDictionary['lights'][lamp.name]['intensity'] = [lamp.color.r, lamp.color.g, lamp.color.b]
             dataDictionary['lights'][lamp.name]['scale'] = lamp.energy
             dataDictionary['lights'][lamp.name]['exponent'] = 4.0
@@ -693,20 +695,17 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
         # Bounding box
         boundingBox = currentObject.bound_box
         # Set bounding box min/max to last element of the bb
-        boundingBoxMin = [boundingBox[7][0], boundingBox[7][1], boundingBox[7][2]]
-        boundingBoxMax = [boundingBox[7][0], boundingBox[7][1], boundingBox[7][2]]
-        for j in range(7):  # 8-1
-            for k in range(3):  # x z y
-                if boundingBox[j][k] < boundingBoxMin[k]:
-                    boundingBoxMin[k] = boundingBox[j][k]
-                if boundingBox[j][k] > boundingBoxMax[k]:
-                    boundingBoxMax[k] = boundingBox[j][k]
-        binary.extend(struct.pack('<f', boundingBoxMin[0]))  # 0 2 1 is correct right handed -> left handed
-        binary.extend(struct.pack('<f', boundingBoxMin[2]))  # '<' = little endian 'f' = float
-        binary.extend(struct.pack('<f', boundingBoxMin[1]))
-        binary.extend(struct.pack('<f', boundingBoxMax[0]))
-        binary.extend(struct.pack('<f', boundingBoxMax[2]))
-        binary.extend(struct.pack('<f', boundingBoxMax[1]))
+        boundingBoxMin = flip_space((boundingBox[7][0], boundingBox[7][1], boundingBox[7][2]))
+        boundingBoxMax = boundingBoxMin.copy()
+        for j in range(7):  # 0-6
+            corner = flip_space((boundingBox[j][0], boundingBox[j][1], boundingBox[j][2]))
+            for k in range(3):  # x y z
+                if corner[k] < boundingBoxMin[k]:
+                    boundingBoxMin[k] = corner[k]
+                if corner[k] > boundingBoxMax[k]:
+                    boundingBoxMax[k] = corner[k]
+        binary.extend(struct.pack('<3f', *boundingBoxMin))    # '<' = little endian  3 = 3 times f  'f' = float32
+        binary.extend(struct.pack('<3f', *boundingBoxMax))
         # <Jump Table>
         lodLevels = []
         lodChainStart = 0
@@ -826,19 +825,14 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
                             uvCoordinates[mesh.loops[loop_index].vertex_index] = uv_layer.data[loop_index].uv
                 vertexDataArray = bytearray()  # Used for deflation
                 for k in range(len(vertices)):
-                    vertexDataArray.extend(struct.pack('<f', mesh.vertices[k].co[0]))
-                    vertexDataArray.extend(struct.pack('<f', mesh.vertices[k].co[2]))
-                    vertexDataArray.extend(struct.pack('<f', mesh.vertices[k].co[1]))
+                    vertexDataArray.extend(struct.pack('<3f', *flip_space(mesh.vertices[k].co)))
                 for k in range(len(vertices)):
                     if use_compression:
                         vertexDataArray.extend(pack_normal32(mesh.vertices[k].normal).to_bytes(4, byteorder='little'))
                     else:
-                        vertexDataArray.extend(struct.pack('<f', mesh.vertices[k].normal[0]))
-                        vertexDataArray.extend(struct.pack('<f', mesh.vertices[k].normal[2]))
-                        vertexDataArray.extend(struct.pack('<f', mesh.vertices[k].normal[1]))
+                        vertexDataArray.extend(struct.pack('<3f', *flip_space(mesh.vertices[k].normal)))
                 for k in range(len(vertices)):
-                    vertexDataArray.extend(struct.pack('<f', uvCoordinates[k][0]))
-                    vertexDataArray.extend(struct.pack('<f', uvCoordinates[k][1]))
+                    vertexDataArray.extend(struct.pack('<2f', uvCoordinates[k][0], uvCoordinates[k][1]))
                 vertexOutData = vertexDataArray
                 if use_deflation and len(vertexDataArray) > 0:
                     vertexOutData = zlib.compress(vertexDataArray, 8)
@@ -885,8 +879,7 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
                             for loop_index in range(polygon.loop_start, polygon.loop_start + polygon.loop_total):
                                 uvCoordinates[mesh.loops[loop_index].vertex_index] = uv_layer.data[loop_index].uv
                         for k in range(len(vertices)):
-                            vertexAttributesDataArray.extend(struct.pack('<f', uvCoordinates[k][0]))
-                            vertexAttributesDataArray.extend(struct.pack('<f', uvCoordinates[k][1]))
+                            vertexAttributesDataArray.extend(struct.pack('<2f', uvCoordinates[k][0], uvCoordinates[k][1]))
                     for colorNumber in range(len(mesh.vertex_colors)):
                         vertexColor = numpy.empty(len(vertices), dtype=object)
                         vertex_color_layer = mesh.vertex_colors[colorNumber]
@@ -903,9 +896,7 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
                             for loop_index in range(polygon.loop_start, polygon.loop_start + polygon.loop_total):
                                 vertexColor[mesh.loops[loop_index].vertex_index] = vertex_color_layer.data[loop_index].color
                         for k in range(len(vertices)):
-                            vertexAttributesDataArray.extend(struct.pack('<f', vertexColor[k][0]))
-                            vertexAttributesDataArray.extend(struct.pack('<f', vertexColor[k][1]))
-                            vertexAttributesDataArray.extend(struct.pack('<f', vertexColor[k][2]))
+                            vertexAttributesDataArray.extend(struct.pack('<3f', vertexColor[k][0], vertexColor[k][1], vertexColor[k][2]))
 
                 vertexAttributesOutData = vertexAttributesDataArray
                 if use_deflation and len(vertexAttributesDataArray) > 0:
@@ -982,14 +973,11 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
             else:
                 # Spheres
                 sphereDataArray = bytearray()
-                center = []
-                center.append((boundingBoxMin[0] + boundingBoxMax[0])/2)
-                center.append((boundingBoxMin[1] + boundingBoxMax[1]) / 2)
-                center.append((boundingBoxMin[2] + boundingBoxMax[2]) / 2)
-                radius = abs(boundingBoxMin[0]-(center[0]))
-                sphereDataArray.extend(struct.pack('<f', center[0]))
-                sphereDataArray.extend(struct.pack('<f', center[2]))
-                sphereDataArray.extend(struct.pack('<f', center[1]))
+                center = ( (boundingBoxMin[0] + boundingBoxMax[0]) / 2,
+                           (boundingBoxMin[1] + boundingBoxMax[1]) / 2,
+                           (boundingBoxMin[2] + boundingBoxMax[2]) / 2 )
+                radius = abs(boundingBoxMin[0]-center[0])
+                sphereDataArray.extend(struct.pack('<3f', *flip_space(center)))
                 sphereDataArray.extend(struct.pack('<f', radius))
 
                 sphereDataArray.extend(materialLookup[lodObject.active_material.name].to_bytes(2, byteorder='little'))
@@ -1036,12 +1024,10 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
             binary.extend((0xFFFFFFFF).to_bytes(4, byteorder='little'))  # TODO Keyframe
             binary.extend((0xFFFFFFFF).to_bytes(4, byteorder='little'))  # TODO Instance ID
             transformMat = currentObject.matrix_world
+            binary.extend(struct.pack('<4f', *transformMat[0]))
+            binary.extend(struct.pack('<4f', *transformMat[2]))
             for k in range(4):
-                binary.extend(struct.pack('<f', transformMat[0][k]))
-            for k in range(4):
-                binary.extend(struct.pack('<f', transformMat[2][k]))
-            for k in range(4):
-                binary.extend(struct.pack('<f', transformMat[1][k]))
+                binary.extend(struct.pack('<f', -transformMat[1][k]))
             numberOfInstances += 1
     numberOfInstancesBytes = numberOfInstances.to_bytes(4, byteorder='little')
     for i in range(4):
