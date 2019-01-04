@@ -1,6 +1,7 @@
 import bpy
 import bmesh
 from mathutils import Vector
+import mathutils
 import os
 import json
 import collections
@@ -79,6 +80,7 @@ def export_json(context, self, filepath, binfilepath):
                 cameraType = "pinhole"
                 dataDictionary['cameras'][camera.name]['type'] = cameraType
                 fov = camera.angle * 180 / 3.141592653589793  # convert rad to degree
+                fov = fov * scn.render.resolution_y / scn.render.resolution_x # correct aspect ratio
                 dataDictionary['cameras'][camera.name]['fov'] = fov
             else:
                 cameraType = "focus"
@@ -113,10 +115,11 @@ def export_json(context, self, filepath, binfilepath):
                 pos = (x_curve.evaluate(f), y_curve.evaluate(f), z_curve.evaluate(f))
                 cameraPath.append(flip_space(pos))
         else:  # for not animated Cameras
+            trans, rot, scale = cameraObject.matrix_world.decompose()
             cameraPath.append(flip_space(cameraObject.location))
-            viewDirection = cameraObject.matrix_world.to_quaternion() * Vector((0.0, 0.0, -1.0)) # TODO why convert to quaternion (very slow)? Does conversion include more than rotation (if yes this is a problem)?
+            viewDirection = rot * Vector((0.0, 0.0, -1.0))
             viewDirectionPath.append(flip_space(viewDirection))
-            up = cameraObject.matrix_world.to_quaternion() * Vector((0.0, 1.0, 0.0))
+            up = rot * Vector((0.0, 1.0, 0.0))
             upPath.append(flip_space(up))
         dataDictionary['cameras'][camera.name]['path'] = cameraPath
         dataDictionary['cameras'][camera.name]['viewDir'] = viewDirectionPath
@@ -162,7 +165,7 @@ def export_json(context, self, filepath, binfilepath):
                 dataDictionary['lights'][lamp.name] = collections.OrderedDict()
             lightType = "directional"
             dataDictionary['lights'][lamp.name]['type'] = lightType
-            viewDirection = lampObject.matrix_world.to_quaternion() * Vector((0.0, 0.0, -1.0)) # TODO again: why quaternion?
+            viewDirection = lampObject.matrix_world.to_quaternion() * Vector((0.0, 0.0, -1.0))
             dataDictionary['lights'][lamp.name]['direction'] = flip_space(viewDirection)
             dataDictionary['lights'][lamp.name]['radiance'] = [lamp.color.r, lamp.color.g, lamp.color.b]
             dataDictionary['lights'][lamp.name]['scale'] = lamp.energy
@@ -695,10 +698,12 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
         # Bounding box
         boundingBox = currentObject.bound_box
         # Set bounding box min/max to last element of the bb
-        boundingBoxMin = flip_space((boundingBox[7][0], boundingBox[7][1], boundingBox[7][2]))
-        boundingBoxMax = boundingBoxMin.copy()
+        #boundingBoxMin = flip_space((boundingBox[7][0], boundingBox[7][1], boundingBox[7][2]))
+        #boundingBoxMax = boundingBoxMin.copy()
+        boundingBoxMin = [ boundingBox[7][0], boundingBox[7][1], boundingBox[7][2] ]
+        boundingBoxMax = [ boundingBox[7][0], boundingBox[7][1], boundingBox[7][2] ]
         for j in range(7):  # 0-6
-            corner = flip_space((boundingBox[j][0], boundingBox[j][1], boundingBox[j][2]))
+            corner = [ boundingBox[j][0], boundingBox[j][1], boundingBox[j][2] ]
             for k in range(3):  # x y z
                 if corner[k] < boundingBoxMin[k]:
                     boundingBoxMin[k] = corner[k]
@@ -825,12 +830,12 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
                             uvCoordinates[mesh.loops[loop_index].vertex_index] = uv_layer.data[loop_index].uv
                 vertexDataArray = bytearray()  # Used for deflation
                 for k in range(len(vertices)):
-                    vertexDataArray.extend(struct.pack('<3f', *flip_space(mesh.vertices[k].co)))
+                    vertexDataArray.extend(struct.pack('<3f', *mesh.vertices[k].co))
                 for k in range(len(vertices)):
                     if use_compression:
                         vertexDataArray.extend(pack_normal32(mesh.vertices[k].normal).to_bytes(4, byteorder='little'))
                     else:
-                        vertexDataArray.extend(struct.pack('<3f', *flip_space(mesh.vertices[k].normal)))
+                        vertexDataArray.extend(struct.pack('<3f', *mesh.vertices[k].normal))
                 for k in range(len(vertices)):
                     vertexDataArray.extend(struct.pack('<2f', uvCoordinates[k][0], uvCoordinates[k][1]))
                 vertexOutData = vertexDataArray
@@ -977,7 +982,7 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
                            (boundingBoxMin[1] + boundingBoxMax[1]) / 2,
                            (boundingBoxMin[2] + boundingBoxMax[2]) / 2 )
                 radius = abs(boundingBoxMin[0]-center[0])
-                sphereDataArray.extend(struct.pack('<3f', *flip_space(center)))
+                sphereDataArray.extend(struct.pack('<3f', *center))
                 sphereDataArray.extend(struct.pack('<f', radius))
 
                 sphereDataArray.extend(materialLookup[lodObject.active_material.name].to_bytes(2, byteorder='little'))
@@ -1024,6 +1029,7 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
             binary.extend((0xFFFFFFFF).to_bytes(4, byteorder='little'))  # TODO Keyframe
             binary.extend((0xFFFFFFFF).to_bytes(4, byteorder='little'))  # TODO Instance ID
             transformMat = currentObject.matrix_world
+            # Apply the flip_space transformation on instance transformation level.
             binary.extend(struct.pack('<4f', *transformMat[0]))
             binary.extend(struct.pack('<4f', *transformMat[2]))
             for k in range(4):
