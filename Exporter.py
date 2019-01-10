@@ -72,6 +72,8 @@ def export_json(context, self, filepath, binfilepath):
     for i in range(len(cameras)):
         cameraObject = cameras[i]
         camera = cameraObject.data
+        if camera.users == 0:
+            continue
         if camera.type == "PERSP":
             aperture = camera.gpu_dof.fstop
             if camera.name not in dataDictionary['cameras']:
@@ -135,6 +137,8 @@ def export_json(context, self, filepath, binfilepath):
     for i in range(len(lamps)):
         lampObject = lamps[i]
         lamp = lampObject.data
+        if lamp.users == 0:
+            continue
         if lamp.type == "POINT":
             if lamp.name not in dataDictionary['lights']:
                 dataDictionary['lights'][lamp.name] = collections.OrderedDict()
@@ -206,9 +210,24 @@ def export_json(context, self, filepath, binfilepath):
 
     # Materials
 
+    # Create dict with used material names
+    objects = bpy.data.objects
+    materialNames = dict()
+
+    for obj in objects:
+        if obj.users != 0:
+            if obj.type == "MESH" or "sphere" in obj:
+                if obj.material_slots is not None:
+                    for materialSlot in obj.material_slots:
+                        if materialSlot.material is not None:
+                            materialNames[materialSlot.material.name] = True
+
     materials = bpy.data.materials
     for i in range(len(materials)):
         material = materials[i]
+        # if material is not used continue
+        if material.name not in materialNames:
+            continue
         # Check for Multi-Layer Material
         layerCount = 0
         materialDepth = 0
@@ -583,8 +602,8 @@ def export_json(context, self, filepath, binfilepath):
     # Material assignments
     if 'materialAssignments' not in dataDictionary['scenarios'][scn.name]:
         dataDictionary['scenarios'][scn.name]['materialAssignments'] = collections.OrderedDict()
-    for material in materials:
-        dataDictionary['scenarios'][scn.name]['materialAssignments'][material.name] = material.name
+    for material in dataDictionary['materials']:
+        dataDictionary['scenarios'][scn.name]['materialAssignments'][material] = material
 
     # Object properties
     if 'objectProperties' not in dataDictionary['scenarios'][scn.name]:
@@ -608,9 +627,22 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
     binary = bytearray()
     # Materials Header
     binary.extend("Mats".encode())
-    materials = bpy.data.materials
+    materials = []
     materialNames = []
     materialNameLengths = []
+
+    materialNamesDict = dict()
+
+    for obj in bpy.data.objects:
+        if obj.users != 0:
+            if obj.type == "MESH" or "sphere" in obj:
+                if obj.material_slots is not None:
+                    for materialSlot in obj.material_slots:
+                        if materialSlot.material is not None:
+                            if materialSlot.material.name not in materialNamesDict:
+                                materialNamesDict[materialSlot.material.name] = True
+                                materials.append(materialSlot.material)
+
     materialLookup = collections.OrderedDict()  # Lookup for the polygons
     bytePosition = 16
     if len(materials) == 0:
@@ -647,12 +679,17 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
 
     countOfObjects = 0
     if use_selection:
-        objects = bpy.context.selected_objects
+        tempObjects = bpy.context.selected_objects
     else:
-        objects = bpy.data.objects
+        tempObjects = bpy.data.objects
+
+    objects = []
+    for obj in tempObjects:
+        if obj.users != 0:
+            objects.append(obj)
 
     for i in range(len(objects)):
-        if objects[i].type != "MESH":
+        if objects[i].type != "MESH" and "sphere" not in objects[i]:
             continue
         countOfObjects += 1
 
@@ -757,12 +794,13 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
                     facesToTriangulate.append(faces[k])
             bmesh.ops.triangulate(bm, faces=facesToTriangulate[:], quad_method=0, ngon_method=0)
             # Split vertices if vertex has multiple uv coordinates (is used in multiple triangles)
-            if len(lodObject.data.uv_layers):
-                # mark seams from uv islands
-                bpy.ops.uv.seams_from_islands()
-                seams = [e for e in bm.edges if e.seam]
-                # split on seams
-                bmesh.ops.split_edges(bm, edges=seams)
+            if 'uv_layers' in lodObject.data:
+                if len(lodObject.data.uv_layers):
+                    # mark seams from uv islands
+                    bpy.ops.uv.seams_from_islands()
+                    seams = [e for e in bm.edges if e.seam]
+                    # split on seams
+                    bmesh.ops.split_edges(bm, edges=seams)
 
             faces = bm.faces  # update faces
             faces.ensure_lookup_table()
