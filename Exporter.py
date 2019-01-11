@@ -688,9 +688,12 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
         if obj.users != 0:
             objects.append(obj)
 
+    usedMeshes = []
     for i in range(len(objects)):
         currentObject = objects[i]
-        if currentObject.type != "MESH" and "sphere" not in objects[i]:
+        if currentObject.type != "MESH" and "sphere" not in currentObject:  # If mesh or sphere
+            continue
+        if currentObject.data in usedMeshes:
             continue
         if len(currentObject.lod_levels) != 0:  # if object has LOD levels
             if currentObject.type != "MESH" and "sphere" in currentObject:  # skip object with data doesnt work for meshes
@@ -701,6 +704,7 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
                         continue
             elif len(currentObject.data.vertices) != 0:  # if it has data ( objects with LOD have no data, but the LODs are objects too and have data skip them) works only for meshes
                 continue
+        usedMeshes.append(currentObject.data)
         countOfObjects += 1
         print(currentObject.name)
 
@@ -750,22 +754,9 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
         # OBJID of previous object in animation
         binary.extend((0xFFFFFFFF).to_bytes(4, byteorder='little'))  # TODO keyframes
         # Bounding box
-        boundingBox = currentObject.bound_box
-        # Set bounding box min/max to last element of the bb
-        #boundingBoxMin = flip_space((boundingBox[7][0], boundingBox[7][1], boundingBox[7][2]))
-        #boundingBoxMax = boundingBoxMin.copy()
-        boundingBoxMin = [ boundingBox[7][0], boundingBox[7][1], boundingBox[7][2] ]
-        boundingBoxMax = [ boundingBox[7][0], boundingBox[7][1], boundingBox[7][2] ]
-        for j in range(7):  # 0-6
-            corner = [ boundingBox[j][0], boundingBox[j][1], boundingBox[j][2] ]
-            for k in range(3):  # x y z
-                if corner[k] < boundingBoxMin[k]:
-                    boundingBoxMin[k] = corner[k]
-                if corner[k] > boundingBoxMax[k]:
-                    boundingBoxMax[k] = corner[k]
-        binary.extend(struct.pack('<3f', *boundingBoxMin))    # '<' = little endian  3 = 3 times f  'f' = float32
-        binary.extend(struct.pack('<3f', *boundingBoxMax))
-        # <Jump Table>
+
+        # Calculate Lod chain to get bounding box over all Lods
+
         lodLevels = []
         lodChainStart = 0
         if len(currentObject.lod_levels) != 0:  # if it has Lod levels check depth of Lod levels
@@ -776,14 +767,42 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
                 if len(lodObject.lod_levels) == 0:
                     lodLevels = []
                     lodChainStart = 0
-                    self.report({'WARNING'}, ("Skipped LOD levels from: \"%s\" because LOD Object: \"%s\" has no successor." % (currentObject.name, lodObject.name)))
+                    self.report({'WARNING'}, (
+                                "Skipped LOD levels from: \"%s\" because LOD Object: \"%s\" has no successor." % (
+                        currentObject.name, lodObject.name)))
                     break
                 if maxDistance < lodObject.lod_levels[1].distance:
                     maxDistance = lodObject.lod_levels[1].distance  # the last LOD level has the highest distance
-                    lodChainStart = len(lodLevels)-1
+                    lodChainStart = len(lodLevels) - 1
                 lodObject = lodObject.lod_levels[1].object
         if len(lodLevels) == 0:
             lodLevels.append(currentObject)  # if no LOD levels the object itself ist the only LOD level
+
+        boundingBox = lodLevels[0].bound_box
+
+        boundingBoxMin = [boundingBox[7][0], boundingBox[7][1], boundingBox[7][2]]
+        boundingBoxMax = [boundingBox[7][0], boundingBox[7][1], boundingBox[7][2]]
+
+        for lodObject in lodLevels:
+
+            boundingBox = lodObject.bound_box
+            # Set bounding box min/max to last element of the bb
+            # boundingBoxMin = flip_space((boundingBox[7][0], boundingBox[7][1], boundingBox[7][2]))
+            # boundingBoxMax = boundingBoxMin.copy()
+
+            for j in range(7):  # 0-6
+                corner = [ boundingBox[j][0], boundingBox[j][1], boundingBox[j][2] ]
+                for k in range(3):  # x y z
+                    if corner[k] < boundingBoxMin[k]:
+                        boundingBoxMin[k] = corner[k]
+                    if corner[k] > boundingBoxMax[k]:
+                        boundingBoxMax[k] = corner[k]
+        print(*boundingBoxMin)
+        print(*boundingBoxMax)
+        binary.extend(struct.pack('<3f', *boundingBoxMin))    # '<' = little endian  3 = 3 times f  'f' = float32
+        binary.extend(struct.pack('<3f', *boundingBoxMax))
+        # <Jump Table> LOD
+
         # Number of entries in table
         binary.extend((len(lodLevels)).to_bytes(4, byteorder='little'))
         lodStartBinaryPosition = len(binary)
