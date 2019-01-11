@@ -689,9 +689,20 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
             objects.append(obj)
 
     for i in range(len(objects)):
-        if objects[i].type != "MESH" and "sphere" not in objects[i]:
+        currentObject = objects[i]
+        if currentObject.type != "MESH" and "sphere" not in objects[i]:
             continue
+        if len(currentObject.lod_levels) != 0:  # if object has LOD levels
+            if currentObject.type != "MESH" and "sphere" in currentObject:  # skip object with data doesnt work for meshes
+                tempMesh = currentObject.to_mesh(bpy.context.scene, True, calc_tessface=False, settings='RENDER')  # excepts if object has no geometry and is mesh but returns None for none Mesh
+                if tempMesh is not None:
+                    if len(currentObject.data.vertices) != 0:
+                        bpy.data.meshes.remove(tempMesh)
+                        continue
+            elif len(currentObject.data.vertices) != 0:  # if it has data ( objects with LOD have no data, but the LODs are objects too and have data skip them) works only for meshes
+                continue
         countOfObjects += 1
+        print(currentObject.name)
 
     binary.extend(countOfObjects.to_bytes(4, byteorder='little'))
 
@@ -710,7 +721,13 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
         if currentObject.data in usedMeshes:
             continue
         if len(currentObject.lod_levels) != 0:  # if object has LOD levels
-            if len(currentObject.data.vertices) != 0:  # if it has data ( objects with LOD have no data, but the LODs are objects too and have data skip them)
+            if currentObject.type != "MESH" and "sphere" in currentObject:  # skip object with data doesnt work for meshes
+                tempMesh = currentObject.to_mesh(bpy.context.scene, True, calc_tessface=False, settings='RENDER')  # excepts if object has no geometry and is mesh but returns None for none Mesh
+                if tempMesh is not None:
+                    if len(currentObject.data.vertices) != 0:
+                        bpy.data.meshes.remove(tempMesh)
+                        continue
+            elif len(currentObject.data.vertices) != 0:  # if it has data ( objects with LOD have no data, but the LODs are objects too and have data skip them) works only for meshes
                 continue
         usedMeshes.append(currentObject.data)
         objectStartPosition = len(binary).to_bytes(8, byteorder='little')
@@ -783,47 +800,48 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
             scn.objects.active = lodObject
             mode = context.active_object.mode
             bpy.ops.object.mode_set(mode='EDIT')
-            mesh = lodObject.to_mesh(scn, True, calc_tessface=False, settings='RENDER')  # applies all modifiers
-            bm = bmesh.new()
-            bm.from_mesh(mesh)  # bmesh gives a local editable mesh copy
-            faces = bm.faces
-            faces.ensure_lookup_table()
-            facesToTriangulate = []
-            for k in range(len(faces)):
-                if len(faces[k].edges) > 4:
-                    facesToTriangulate.append(faces[k])
-            bmesh.ops.triangulate(bm, faces=facesToTriangulate[:], quad_method=0, ngon_method=0)
-            # Split vertices if vertex has multiple uv coordinates (is used in multiple triangles)
-            if 'uv_layers' in lodObject.data:
-                if len(lodObject.data.uv_layers):
-                    # mark seams from uv islands
-                    bpy.ops.uv.seams_from_islands()
-                    seams = [e for e in bm.edges if e.seam]
-                    # split on seams
-                    bmesh.ops.split_edges(bm, edges=seams)
+            if "sphere" not in lodObject:
+                mesh = lodObject.to_mesh(scn, True, calc_tessface=False, settings='RENDER')  # applies all modifiers
+                bm = bmesh.new()
+                bm.from_mesh(mesh)  # bmesh gives a local editable mesh copy
+                faces = bm.faces
+                faces.ensure_lookup_table()
+                facesToTriangulate = []
+                for k in range(len(faces)):
+                    if len(faces[k].edges) > 4:
+                        facesToTriangulate.append(faces[k])
+                bmesh.ops.triangulate(bm, faces=facesToTriangulate[:], quad_method=0, ngon_method=0)
+                # Split vertices if vertex has multiple uv coordinates (is used in multiple triangles)
+                if 'uv_layers' in lodObject.data:
+                    if len(lodObject.data.uv_layers):
+                        # mark seams from uv islands
+                        bpy.ops.uv.seams_from_islands()
+                        seams = [e for e in bm.edges if e.seam]
+                        # split on seams
+                        bmesh.ops.split_edges(bm, edges=seams)
 
-            faces = bm.faces  # update faces
-            faces.ensure_lookup_table()
-            numberOfTriangles = 0
-            numberOfQuads = 0
-            for k in range(len(faces)):
-                numVertices = len(faces[k].verts)
-                if numVertices == 3:
-                    numberOfTriangles += 1
-                elif numVertices == 4:
-                    numberOfQuads += 1
-                else:
-                    self.report({'ERROR'}, ("%d Vertices in face from object: \"%s\"." % (numVertices, lodObject.name)))
-                    return
-            bm.to_mesh(mesh)
-            bm.free()
-            numberOfSpheres = 0
-            numberOfVertices = len(mesh.vertices)
-            numberOfEdges = len(mesh.edges)
-            numberOfVertexAttributes = 0
-            numberOfFaceAttributes = 0  # TODO Face Attributes
-            numberOfSphereAttributes = 0
-            if "sphere" in lodObject: # Change Values if it is an sphere
+                faces = bm.faces  # update faces
+                faces.ensure_lookup_table()
+                numberOfTriangles = 0
+                numberOfQuads = 0
+                for k in range(len(faces)):
+                    numVertices = len(faces[k].verts)
+                    if numVertices == 3:
+                        numberOfTriangles += 1
+                    elif numVertices == 4:
+                        numberOfQuads += 1
+                    else:
+                        self.report({'ERROR'}, ("%d Vertices in face from object: \"%s\"." % (numVertices, lodObject.name)))
+                        return
+                bm.to_mesh(mesh)
+                bm.free()
+                numberOfSpheres = 0
+                numberOfVertices = len(mesh.vertices)
+                numberOfEdges = len(mesh.edges)
+                numberOfVertexAttributes = 0
+                numberOfFaceAttributes = 0  # TODO Face Attributes
+                numberOfSphereAttributes = 0
+            else:  # Change Values if it is an sphere
                 numberOfTriangles = 0
                 numberOfQuads = 0
                 numberOfSpheres = 1
@@ -1013,6 +1031,10 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
                 binary.extend(matIDOutData)
                 # Face Attributes
                 # TODO Face Attributes (with deflation)
+
+                bpy.data.meshes.remove(mesh)
+                # reset used mode
+                bpy.ops.object.mode_set(mode=mode)
             else:
                 # Spheres
                 sphereDataArray = bytearray()
@@ -1023,25 +1045,26 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
                 sphereDataArray.extend(struct.pack('<3f', *center))
                 sphereDataArray.extend(struct.pack('<f', radius))
 
-                sphereDataArray.extend(materialLookup[lodObject.active_material.name].to_bytes(2, byteorder='little'))
+                if lodObject.active_material is not None:
+                    sphereDataArray.extend(materialLookup[lodObject.active_material.name].to_bytes(2, byteorder='little'))
+                    if (objectFlags & 1) == 0:
+                        if lodObject.active_material.emit > 0.0:
+                            objectFlags |= 1
+                            objectFlagsBin = objectFlags.to_bytes(4, byteorder='little')
+                            for k in range(4):
+                                binary[objectFlagsBinaryPosition + k] = objectFlagsBin[k]
+                else:
 
-                if (objectFlags & 1) == 0:
-                    if lodObject.active_material.emit > 0.0:
-                        objectFlags |= 1
-                        objectFlagsBin = objectFlags.to_bytes(4, byteorder='little')
-                        for k in range(4):
-                            binary[objectFlagsBinaryPosition + k] = objectFlagsBin[k]
+                    self.report({'WARNING'}, ("LOD Object: \"%s\" has no materials." % (lodObject.name)))
+                    sphereDataArray.extend((0).to_bytes(2, byteorder='little'))  # first material is default when the object has no mats
 
                 sphereOutData = sphereDataArray
                 # TODO Sphere Attributes
                 if use_deflation and len(sphereDataArray) > 0:
-                    matIDOutData = zlib.compress(sphereDataArray, 8)
+                    sphereOutData = zlib.compress(sphereDataArray, 8)
                     binary.extend(len(sphereOutData).to_bytes(4, byteorder='little'))
                     binary.extend(len(sphereDataArray).to_bytes(4, byteorder='little'))
                 binary.extend(sphereOutData)
-            bpy.data.meshes.remove(mesh)
-            # reset used mode
-            bpy.ops.object.mode_set(mode=mode)
     #reset active object
     scn.objects.active = activeObject
     # Instances
@@ -1056,9 +1079,16 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
     numberOfInstances = 0
     for i in range(len(objects)):
         currentObject = objects[i]
-        if currentObject.type != "MESH":
+        if currentObject.type != "MESH" and "sphere" not in currentObject:
             continue
+        if currentObject.type != "MESH" and "sphere" in currentObject:  # doesnt work for meshes
+            tempMesh = currentObject.to_mesh(bpy.context.scene, True, calc_tessface=False, settings='RENDER')  # excepts if object has no geometry and is mesh but returns None for none Mesh
+            if tempMesh is None:
+                continue
+            bpy.data.meshes.remove(tempMesh)
         if len(currentObject.lod_levels) != 0:  # if object has LOD levels
+            if not hasattr(currentObject.data, 'vertices'):
+                continue
             if len(currentObject.data.vertices) != 0:  # if it has data ( objects with LOD have no data, but the LODs are objects too and have data skip them)
                 continue
         if currentObject.data in usedMeshes:
