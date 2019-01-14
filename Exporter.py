@@ -895,9 +895,15 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
                 if len(mesh.uv_layers) == 0:
                     self.report({'WARNING'}, ("LOD Object: \"%s\" has no uv layers." % (lodObject.name)))
                     for k in range(len(uvCoordinates)):
-                        acos = math.acos(vertices[k].co[1]/(math.sqrt((vertices[k].co[0]*vertices[k].co[0]) + (vertices[k].co[1]*vertices[k].co[1]) + (vertices[k].co[2]*vertices[k].co[2]))))
-                        arctan2 = numpy.arctan2(vertices[k].co[2], vertices[k].co[0])
-                        uvCoordinates[k] = [acos, arctan2]
+                        theta = math.acos(vertices[k].co[1]/(math.sqrt((vertices[k].co[0]*vertices[k].co[0]) + (vertices[k].co[1]*vertices[k].co[1]) + (vertices[k].co[2]*vertices[k].co[2]))))
+                        phi = numpy.arctan2(vertices[k].co[2], vertices[k].co[0])
+                        if theta < 0:
+                            theta += math.pi
+                        if(phi < 0):
+                            phi += 2*math.pi
+                        u = theta / math.pi
+                        v = phi / (2*math.pi)
+                        uvCoordinates[k] = [u, v]
                 else:
                     uv_layer = mesh.uv_layers[0]
                     for polygon in mesh.polygons:
