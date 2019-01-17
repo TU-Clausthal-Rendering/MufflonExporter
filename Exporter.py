@@ -134,6 +134,7 @@ def export_json(context, self, filepath, binfilepath):
         return -1
 
     # Lights
+    lightNames = []
 
     lamps = [o for o in bpy.data.objects if o.type == 'LAMP']
     for i in range(len(lamps)):
@@ -142,6 +143,7 @@ def export_json(context, self, filepath, binfilepath):
         if lamp.users == 0:
             continue
         if lamp.type == "POINT":
+            lightNames.append(lamp.name)
             if lamp.name not in dataDictionary['lights']:
                 dataDictionary['lights'][lamp.name] = collections.OrderedDict()
             if lamp.active_texture is not None:
@@ -167,6 +169,7 @@ def export_json(context, self, filepath, binfilepath):
                 dataDictionary['lights'][lamp.name]['intensity'] = [lamp.color.r, lamp.color.g, lamp.color.b]
                 dataDictionary['lights'][lamp.name]['scale'] = lamp.energy
         elif lamp.type == "SUN":
+            lightNames.append(lamp.name)
             if lamp.name not in dataDictionary['lights']:
                 dataDictionary['lights'][lamp.name] = collections.OrderedDict()
             lightType = "directional"
@@ -176,6 +179,7 @@ def export_json(context, self, filepath, binfilepath):
             dataDictionary['lights'][lamp.name]['radiance'] = [lamp.color.r, lamp.color.g, lamp.color.b]
             dataDictionary['lights'][lamp.name]['scale'] = lamp.energy
         elif lamp.type == "SPOT":
+            lightNames.append(lamp.name)
             if lamp.name not in dataDictionary['lights']:
                 dataDictionary['lights'][lamp.name] = collections.OrderedDict()
             lightType = "spot"
@@ -201,6 +205,7 @@ def export_json(context, self, filepath, binfilepath):
                 if worldTextureSlot.texture.image is None:
                     self.report({'WARNING'}, ("Skipping environment map: \"%s\" because it has no image." % worldTextureSlot.texture.name))
                 else:
+                    lightNames.append(worldTextureSlot.texture.name)
                     dataDictionary['lights'][worldTextureSlot.texture.name] = collections.OrderedDict()
                     absPath = bpy.path.abspath(worldTextureSlot.texture.image.filepath)
                     finalPath = os.path.relpath(absPath, os.path.dirname(filepath))
@@ -596,9 +601,7 @@ def export_json(context, self, filepath, binfilepath):
 
     dataDictionary['scenarios'][scn.name]['camera'] = cameraName
     dataDictionary['scenarios'][scn.name]['resolution'] = [scn.render.resolution_x, scn.render.resolution_y]
-    lightNames = []
-    for light in dataDictionary['lights']:
-        lightNames.append(light)
+
     dataDictionary['scenarios'][scn.name]['lights'] = lightNames
     dataDictionary['scenarios'][scn.name]['lod'] = 0
     # Material assignments
