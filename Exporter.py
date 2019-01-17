@@ -1058,8 +1058,6 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
                 # TODO Face Attributes (with deflation)
 
                 bpy.data.meshes.remove(mesh)
-                # reset used mode
-                bpy.ops.object.mode_set(mode=mode)
             else:
                 # Spheres
                 sphereDataArray = bytearray()
@@ -1090,6 +1088,8 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
                     binary.extend(len(sphereOutData).to_bytes(4, byteorder='little'))
                     binary.extend(len(sphereDataArray).to_bytes(4, byteorder='little'))
                 binary.extend(sphereOutData)
+            # reset used mode
+            bpy.ops.object.mode_set(mode=mode)
     #reset active object
     scn.objects.active = activeObject
     # Instances
