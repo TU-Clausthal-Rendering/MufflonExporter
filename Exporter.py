@@ -32,14 +32,7 @@ def export_json(context, self, filepath, binfilepath):
     binary = os.path.relpath(binfilepath, os.path.commonpath([filepath, binfilepath]))
 
     scn = context.scene
-    oldData = collections.OrderedDict()
     dataDictionary = collections.OrderedDict()
-    dataDictionary['version'] = version
-    dataDictionary['binary'] = binary
-    dataDictionary['cameras'] = collections.OrderedDict()
-    dataDictionary['lights'] = collections.OrderedDict()
-    dataDictionary['materials'] = collections.OrderedDict()
-    dataDictionary['scenarios'] = collections.OrderedDict()
 
     materialKeys = ["type", "albedo", "roughness", "ndf", "absorption", "radiance", "scale", "refractionIndex", "factorA", "factorB", "layerA", "layerB", "layerReflection", "layerRefraction"]
     lambertKeys = ["type", "albedo"]
@@ -57,14 +50,23 @@ def export_json(context, self, filepath, binfilepath):
         file.close()
         try:
             oldData = json.loads(jsonStr, object_pairs_hook=OrderedDict)  # loads the old json and preserves ordering
+            dataDictionary = oldData.copy()
         except json.decoder.JSONDecodeError as e:
             self.report({'ERROR'}, "Old JSON has wrong format: " + str(e))
             return -1
+        dataDictionary['version'] = version
+        dataDictionary['binary'] = binary
         dataDictionary['cameras'] = oldData['cameras']
         dataDictionary['lights'] = oldData['lights']
         dataDictionary['materials'] = oldData['materials']
         dataDictionary['scenarios'] = oldData['scenarios']
-
+    else:
+        dataDictionary['version'] = version
+        dataDictionary['binary'] = binary
+        dataDictionary['cameras'] = collections.OrderedDict()
+        dataDictionary['lights'] = collections.OrderedDict()
+        dataDictionary['materials'] = collections.OrderedDict()
+        dataDictionary['scenarios'] = collections.OrderedDict()
     # Cameras
 
     cameras = [o for o in bpy.data.objects if o.type == 'CAMERA']
