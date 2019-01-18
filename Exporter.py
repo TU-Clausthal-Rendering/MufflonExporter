@@ -1122,7 +1122,7 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
                 continue
         if currentObject.data in usedMeshes:
             index = usedMeshes.index(currentObject.data)
-            binary.extend(len(colorName.encode()).to_bytes(4, byteorder='little'))
+            binary.extend(len(currentObject.name.encode()).to_bytes(4, byteorder='little'))
             binary.extend(currentObject.name.encode())
             binary.extend(index.to_bytes(4, byteorder='little'))  # Object ID
             binary.extend((0xFFFFFFFF).to_bytes(4, byteorder='little'))  # TODO Keyframe
