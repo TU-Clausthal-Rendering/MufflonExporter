@@ -189,7 +189,6 @@ def export_json(context, self, filepath, binfilepath):
             dataDictionary['lights'][lamp.name]['direction'] = flip_space(lightDirection)
             dataDictionary['lights'][lamp.name]['intensity'] = [lamp.color.r, lamp.color.g, lamp.color.b]
             dataDictionary['lights'][lamp.name]['scale'] = lamp.energy
-            dataDictionary['lights'][lamp.name]['exponent'] = 4.0
             dataDictionary['lights'][lamp.name]['width'] = lamp.spot_size / 2
             dataDictionary['lights'][lamp.name]['falloffStart'] = lamp.spot_size / 2
         else:
@@ -1123,6 +1122,8 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
                 continue
         if currentObject.data in usedMeshes:
             index = usedMeshes.index(currentObject.data)
+            binary.extend(len(colorName.encode()).to_bytes(4, byteorder='little'))
+            binary.extend(currentObject.name.encode())
             binary.extend(index.to_bytes(4, byteorder='little'))  # Object ID
             binary.extend((0xFFFFFFFF).to_bytes(4, byteorder='little'))  # TODO Keyframe
             binary.extend((0xFFFFFFFF).to_bytes(4, byteorder='little'))  # TODO Instance ID
