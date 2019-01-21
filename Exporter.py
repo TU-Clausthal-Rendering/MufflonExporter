@@ -710,7 +710,6 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
                 continue
         usedMeshes.append(currentObject.data)
         countOfObjects += 1
-        print(currentObject.name)
 
     binary.extend(countOfObjects.to_bytes(4, byteorder='little'))
 
@@ -801,8 +800,6 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
                         boundingBoxMin[k] = corner[k]
                     if corner[k] > boundingBoxMax[k]:
                         boundingBoxMax[k] = corner[k]
-        print(*boundingBoxMin)
-        print(*boundingBoxMax)
         binary.extend(struct.pack('<3f', *boundingBoxMin))    # '<' = little endian  3 = 3 times f  'f' = float32
         binary.extend(struct.pack('<3f', *boundingBoxMax))
         # <Jump Table> LOD
@@ -918,7 +915,7 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
                     vertexDataArray.extend(struct.pack('<3f', *mesh.vertices[k].co))
                 for k in range(len(vertices)):
                     if use_compression:
-                        vertexDataArray.extend(pack_normal32(mesh.vertices[k].normal).to_bytes(4, byteorder='little'))
+                        vertexDataArray.extend(pack_normal32(mesh.vertices[k].normal).to_bytes(4, byteorder='little', signed=True))
                     else:
                         vertexDataArray.extend(struct.pack('<3f', *mesh.vertices[k].normal))
                 for k in range(len(vertices)):
@@ -1164,15 +1161,15 @@ def export_mufflon(context, self, filepath, use_selection, use_compression,
     return {'FINISHED'}
 
 def pack_normal32(vec3):
-    l1norm = abs(vec3[0]) + abs(vec3[2]) + abs(vec3[1])
-    if vec3[1] >= 0:
+    l1norm = abs(vec3[0]) + abs(vec3[1]) + abs(vec3[2])
+    if vec3[2] >= 0:
         u = vec3[0] / l1norm
-        v = vec3[2] / l1norm
+        v = vec3[1] / l1norm
     else:  # warp lower hemisphere
-        u = (1 - abs(vec3[2]) / l1norm) * (1 if vec3[0] >= 0 else -1)
-        v = (1 - abs(vec3[0]) / l1norm) * (1 if vec3[2] >= 0 else -1)
-    u = math.floor((u / 2 + 0.5) * 65535.49 + 0.5)  # from [-1,1] to [0,2^16-1]
-    v = math.floor((v / 2 + 0.5) * 65535.49 + 0.5)  # from [-1,1] to [0,2^16-1]
+        u = (1 - abs(vec3[1]) / l1norm) * (1 if vec3[0] >= 0 else -1)
+        v = (1 - abs(vec3[0]) / l1norm) * (1 if vec3[1] >= 0 else -1)
+    u = math.floor(u * 32767.0 + 0.5)  # from [-1,1] to [-2^15,2^15-1]
+    v = math.floor(v * 32767.0 + 0.5)  # from [-1,1] to [-2^15,2^15-1]
     return u | (v << 16)
 
 # ExportHelper is a helper class, defines filename and
@@ -1216,7 +1213,7 @@ class MufflonExporter(Operator, ExportHelper):
 
     def execute(self, context):
         return export_mufflon(context, self, self.filepath, self.use_selection,
-                              self.use_compression, self.use_deflation)
+                              self.use_deflation, self.use_compression)
 
 
 # Only needed if you want to add into a dynamic menu
