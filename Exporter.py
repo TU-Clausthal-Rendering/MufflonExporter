@@ -190,7 +190,9 @@ def export_json(context, self, filepath, binfilepath):
             dataDictionary['lights'][lamp.name]['intensity'] = [lamp.color.r, lamp.color.g, lamp.color.b]
             dataDictionary['lights'][lamp.name]['scale'] = lamp.energy
             dataDictionary['lights'][lamp.name]['width'] = lamp.spot_size / 2
-            dataDictionary['lights'][lamp.name]['falloffStart'] = lamp.spot_size / 2
+            # Try to match the inner circle for the falloff (not exact, blender seems buggy):
+            # https://blender.stackexchange.com/questions/39555/how-to-calculate-blend-based-on-spot-size-and-inner-cone-angle
+            dataDictionary['lights'][lamp.name]['falloffStart'] = math.atan(math.tan(lamp.spot_size / 2) * math.sqrt(1-lamp.spot_blend))
         else:
             self.report({'WARNING'}, ("Skipping unsupported lamp type: \"%s\" from: \"%s\"." % (lamp.type, lamp.name)))
             continue
