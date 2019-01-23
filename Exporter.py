@@ -27,22 +27,37 @@ bl_info = {
 def flip_space(vec):
     return [vec[0], vec[2], -vec[1]]
 
+materialKeys = ["type", "albedo", "roughness", "ndf", "absorption", "radiance", "scale", "refractionIndex", "factorA", "factorB", "layerA", "layerB", "layerReflection", "layerRefraction"]
+rootFilePath = ""
+
+
+def make_path_relative_to_root(blenderPath):
+    absPath = bpy.path.abspath(blenderPath)
+    finalPath = os.path.relpath(absPath, rootFilePath)
+    finalPath = finalPath.replace("\\", "/")
+    return finalPath
+
+
+def write_lambert_material(workDictionary, textureMap, material):
+    for key in materialKeys: # Delete all material keys which might exist due to a change of the material
+        workDictionary.pop(key, None)
+    workDictionary['type'] = "lambert"
+    if 'diffuse' in textureMap:
+        workDictionary['albedo'] = make_path_relative_to_root(material.texture_slots[textureMap['diffuse']].texture.image.filepath)
+    else:
+        workDictionary['albedo'] = [
+            material.diffuse_color.r * material.diffuse_intensity,
+            material.diffuse_color.g * material.diffuse_intensity,
+            material.diffuse_color.b * material.diffuse_intensity]
+
+
 def export_json(context, self, filepath, binfilepath):
     version = "1.0"
     binary = os.path.relpath(binfilepath, os.path.commonpath([filepath, binfilepath]))
+    global rootFilePath; rootFilePath = os.path.dirname(filepath)
 
     scn = context.scene
     dataDictionary = collections.OrderedDict()
-
-    materialKeys = ["type", "albedo", "roughness", "ndf", "absorption", "radiance", "scale", "refractionIndex", "factorA", "factorB", "layerA", "layerB", "layerReflection", "layerRefraction"]
-    lambertKeys = ["type", "albedo"]
-    torranceKeys = ["type", "albedo", "roughness", "ndf"]
-    walterKeys = ["type", "roughness", "ndf", "absorption"]
-    emissiveKeys = ["type", "radiance", "scale"]
-    orennayarKeys = ["type", "albedo", "roughness"]
-    blendKeys = ["type", "layerA", "layerB", "factorA", "factorB"]
-    fresnelKeys = ["type", "layerReflection", "layerRefraction", "refractionIndex"]
-
 
     if os.path.isfile(filepath):
         file = open(filepath, 'r')
@@ -157,9 +172,7 @@ def export_json(context, self, filepath, binfilepath):
                         lightType = "goniometric"
                         dataDictionary['lights'][lamp.name]['type'] = lightType
                         dataDictionary['lights'][lamp.name]['position'] = flip_space(lampObject.location)
-                        absPath = bpy.path.abspath(lampTextureSlot.texture.image.filepath)
-                        finalPath = os.path.relpath(absPath, os.path.dirname(filepath))
-                        finalPath = finalPath.replace("\\", "/")
+                        finalPath = make_path_relative_to_root(lampTextureSlot.texture.image.filepath)
                         dataDictionary['lights'][lamp.name]['map'] = finalPath
                         dataDictionary['lights'][lamp.name]['scale'] = lamp.energy
             else:
@@ -208,9 +221,7 @@ def export_json(context, self, filepath, binfilepath):
                 else:
                     lightNames.append(worldTextureSlot.texture.name)
                     dataDictionary['lights'][worldTextureSlot.texture.name] = collections.OrderedDict()
-                    absPath = bpy.path.abspath(worldTextureSlot.texture.image.filepath)
-                    finalPath = os.path.relpath(absPath, os.path.dirname(filepath))
-                    finalPath = finalPath.replace("\\", "/")
+                    finalPath = make_path_relative_to_root(worldTextureSlot.texture.image.filepath)
                     lightType = "envmap"
                     dataDictionary['lights'][worldTextureSlot.texture.name]["type"] = lightType
                     dataDictionary['lights'][worldTextureSlot.texture.name]["map"] = finalPath
@@ -312,12 +323,8 @@ def export_json(context, self, filepath, binfilepath):
         elif layerCount > 1:
             materialDepth = 1
             materialType = "blend"
-            keysToRetain = blendKeys
-            for key in materialKeys:
-                if key not in keysToRetain:
-                    if dataDictionary['materials'][material.name]:
-                        if key in dataDictionary['materials'][material.name]:
-                            dataDictionary['materials'][material.name].pop(key)  # Delete Keys from Dict
+            for key in materialKeys: # Delete all material keys which might exist due to a change of the material
+                dataDictionary['materials'][material.name].pop(key, None)
             dataDictionary['materials'][material.name]['type'] = materialType
             if 'layerA' not in dataDictionary['materials'][material.name]:
                 dataDictionary['materials'][material.name]['layerA'] = collections.OrderedDict()
@@ -327,12 +334,8 @@ def export_json(context, self, filepath, binfilepath):
         else:
             self.report({'WARNING'}, ("Initialised unsupported material: \"%s\" as lambert material." % material.name))
             materialType = "lambert"
-            keysToRetain = lambertKeys
-            for key in materialKeys:
-                if key not in keysToRetain:
-                    if dataDictionary['materials'][material.name]:
-                        if key in dataDictionary['materials'][material.name]:
-                            dataDictionary['materials'][material.name].pop(key)  # Delete Keys from Dict
+            for key in materialKeys: # Delete all material keys which might exist due to a change of the material
+                dataDictionary['materials'][material.name].pop(key, None)
             dataDictionary['materials'][material.name]['type'] = materialType
             dataDictionary['materials'][material.name]['albedo'] = [material.diffuse_color.r, material.diffuse_color.g, material.diffuse_color.b]
             continue
@@ -341,18 +344,11 @@ def export_json(context, self, filepath, binfilepath):
             self.report({'WARNING'}, ("Ignored emissive texture: \"%s\" from material:\"%s\" because emit factor is 0." % (textureSlots[textureMap['emissive']].name, material.name)))
         if material.emit != 0:
             materialType = "emissive"
-            keysToRetain = emissiveKeys
-            for key in materialKeys:
-                if key not in keysToRetain:
-                    if workDictionary:
-                        if key in workDictionary:
-                            workDictionary.pop(key)  # Delete Keys from Dict
+            for key in materialKeys: # Delete all material keys which might exist due to a change of the material
+                workDictionary.pop(key, None)
             workDictionary['type'] = materialType
             if 'emissive' in textureMap:
-                absPath = bpy.path.abspath(textureSlots[textureMap['emissive']].texture.image.filepath)
-                finalPath = os.path.relpath(absPath, os.path.dirname(filepath))
-                finalPath = finalPath.replace("\\", "/")
-                workDictionary['radiance'] = finalPath
+                workDictionary['radiance'] = make_path_relative_to_root(textureSlots[textureMap['emissive']].texture.image.filepath)
             else:
                 workDictionary['radiance'] = [material.diffuse_color.r, material.diffuse_color.g, material.diffuse_color.b]
             workDictionary['scale'] = [material.emit, material.emit, material.emit]
@@ -365,12 +361,8 @@ def export_json(context, self, filepath, binfilepath):
                 if layerCount - currentLayer > 1:  # if we need an additional layer pair
                     materialDepth += 1
                     materialType = "blend"
-                    keysToRetain = blendKeys
-                    for key in materialKeys:
-                        if key not in keysToRetain:
-                            if workDictionary:
-                                if key in workDictionary:
-                                    workDictionary.pop(key)  # Delete Keys from Dict
+                    for key in materialKeys: # Delete all material keys which might exist due to a change of the material
+                        workDictionary.pop(key, None)
                     workDictionary['type'] = materialType
                     if 'layerA' not in workDictionary:
                         workDictionary['layerA'] = collections.OrderedDict()
@@ -380,18 +372,11 @@ def export_json(context, self, filepath, binfilepath):
         if not ignoreDiffuse:
             if useWalter and material.diffuse_shader != "FRESNEL":  # if Fresnel do a fresnel material otherwise walter
                 materialType = "walter"
-                keysToRetain = walterKeys
-                for key in materialKeys:
-                    if key not in keysToRetain:
-                        if workDictionary:
-                            if key in workDictionary:
-                                workDictionary.pop(key)   # Delete Keys from Dict
+                for key in materialKeys: # Delete all material keys which might exist due to a change of the material
+                    workDictionary.pop(key, None)
                 workDictionary['type'] = materialType
                 if 'roughness' in textureMap:
-                    absPath = bpy.path.abspath(textureSlots[textureMap['roughness']].texture.image.filepath)
-                    finalPath = os.path.relpath(absPath, os.path.dirname(filepath))
-                    finalPath = finalPath.replace("\\", "/")
-                    workDictionary['roughness'] = finalPath
+                    workDictionary['roughness'] = make_path_relative_to_root(textureSlots[textureMap['roughness']].texture.image.filepath)
                 else:
                     workDictionary['roughness'] = (1 - material.specular_alpha)
                 if "ndf" in material:
@@ -403,37 +388,16 @@ def export_json(context, self, filepath, binfilepath):
                 currentLayer += 1
                 addedLayer = True
             elif material.diffuse_shader == "LAMBERT" or unsupportedDiffuse:
-                materialType = "lambert"
-                keysToRetain = lambertKeys
-                for key in materialKeys:
-                    if key not in keysToRetain:
-                        if workDictionary:
-                            if key in workDictionary:
-                                workDictionary.pop(key)  # Delete Keys from Dict
-                workDictionary['type'] = materialType
-                if 'diffuse' in textureMap:
-                    absPath = bpy.path.abspath(textureSlots[textureMap['diffuse']].texture.image.filepath)
-                    finalPath = os.path.relpath(absPath, os.path.dirname(filepath))
-                    finalPath = finalPath.replace("\\", "/")
-                    workDictionary['albedo'] = finalPath
-                else:
-                    workDictionary['albedo'] = [material.diffuse_color.r, material.diffuse_color.g, material.diffuse_color.b]
+                write_lambert_material(workDictionary, textureMap, material)
                 currentLayer += 1
                 addedLayer = True
             elif material.diffuse_shader == "OREN_NAYAR":
                 materialType = "orennayar"
-                keysToRetain = orennayarKeys
-                for key in materialKeys:
-                    if key not in keysToRetain:
-                        if workDictionary:
-                            if key in workDictionary:
-                                workDictionary.pop(key)  # Delete Keys from Dict
+                for key in materialKeys: # Delete all material keys which might exist due to a change of the material
+                    workDictionary.pop(key, None)
                 workDictionary['type'] = materialType
                 if 'diffuse' in textureMap:
-                    absPath = bpy.path.abspath(textureSlots[textureMap['diffuse']].texture.image.filepath)
-                    finalPath = os.path.relpath(absPath, os.path.dirname(filepath))
-                    finalPath = finalPath.replace("\\", "/")
-                    workDictionary['albedo'] = finalPath
+                    workDictionary['albedo'] = make_path_relative_to_root(textureSlots[textureMap['diffuse']].texture.image.filepath)
                 else:
                     workDictionary['albedo'] = [material.diffuse_color.r, material.diffuse_color.g, material.diffuse_color.b]
                 workDictionary['roughness'] = material.roughness  # blender is from 0 to pi and in the specifications to pi/2 but pi is ok
@@ -441,30 +405,19 @@ def export_json(context, self, filepath, binfilepath):
                 addedLayer = True
             elif material.diffuse_shader == "FRESNEL":
                 materialType = "fresnel"
-                keysToRetain = fresnelKeys
-                for key in materialKeys:
-                    if key not in keysToRetain:
-                        if workDictionary:
-                            if key in workDictionary:
-                                workDictionary.pop(key)  # Delete Keys from Dict
+                for key in materialKeys: # Delete all material keys which might exist due to a change of the material
+                    workDictionary.pop(key, None)
                 workDictionary['type'] = materialType
                 workDictionary['refractionIndex'] = material.diffuse_fresnel
                 if 'layerRefraction' not in workDictionary:
                     workDictionary['layerRefraction'] = collections.OrderedDict()
                 if useWalter:
                     materialType = "walter"
-                    keysToRetain = walterKeys
-                    for key in materialKeys:
-                        if key not in keysToRetain:
-                            if workDictionary['layerRefraction']:
-                                if key in workDictionary['layerRefraction']:
-                                    workDictionary['layerRefraction'].pop(key)  # Delete Keys from Dict
+                    for key in materialKeys: # Delete all material keys which might exist due to a change of the material
+                        workDictionary.pop(key, None)
                     workDictionary['layerRefraction']['type'] = materialType
                     if 'roughness' in textureMap:
-                        absPath = bpy.path.abspath(textureSlots[textureMap['roughness']].texture.image.filepath)
-                        finalPath = os.path.relpath(absPath, os.path.dirname(filepath))
-                        finalPath = finalPath.replace("\\", "/")
-                        workDictionary['layerRefraction']['roughness'] = finalPath
+                        workDictionary['layerRefraction']['roughness'] = make_path_relative_to_root(textureSlots[textureMap['roughness']].texture.image.filepath)
                     else:
                         workDictionary['layerRefraction']['roughness'] = (1 - material.specular_alpha)
                     if "ndf" in material:
@@ -474,99 +427,33 @@ def export_json(context, self, filepath, binfilepath):
                     absorptionFactor = material.alpha
                     workDictionary['layerRefraction']['absorption'] = [material.diffuse_color.r*absorptionFactor, material.diffuse_color.g*absorptionFactor, material.diffuse_color.b*absorptionFactor]
                 else:
-                    materialType = "lambert"
-                    keysToRetain = lambertKeys
-                    for key in materialKeys:
-                        if key not in keysToRetain:
-                            if workDictionary['layerRefraction']:
-                                if key in workDictionary['layerRefraction']:
-                                    workDictionary['layerRefraction'].pop(key)  # Delete Keys from Dict
-                    workDictionary['layerRefraction']['type'] = materialType
-                    if 'diffuse' in textureMap:
-                        absPath = bpy.path.abspath(textureSlots[textureMap['diffuse']].texture.image.filepath)
-                        finalPath = os.path.relpath(absPath, os.path.dirname(filepath))
-                        finalPath = finalPath.replace("\\", "/")
-                        workDictionary['layerRefraction']['albedo'] = finalPath
-                    else:
-                        workDictionary['layerRefraction']['albedo'] = [material.diffuse_color.r, material.diffuse_color.g, material.diffuse_color.b]
+                    write_lambert_material(workDictionary['layerRefraction'], textureMap, material)
                 if 'layerReflection' not in workDictionary:
                     workDictionary['layerReflection'] = collections.OrderedDict()
                 workDictionary = workDictionary['layerReflection']
                 # No currentLayer += 1  and addedLayer = True here because the layer is not finished yet
-            if layerCount != 1:  # if blend Material
-                if addedLayer:
-                    addedLayer = False
-                    if layerCount - currentLayer == 0:  # check if current layer was A or B
-                        factorName = "factorB"
-                    else:
-                        factorName = "factorA"
-                    workDictionary = dataDictionary['materials'][material.name]
-                    k = 0
-                    while materialDepth - k > 1:  # go to the root dictionary of the work dictionary
-                        workDictionary = workDictionary['layerB']
-                        k += 1
-                    workDictionary[factorName] = material.diffuse_intensity
-                    if layerCount - currentLayer != 0:  # if current layer was A set work dictionary to B
-                        workDictionary = workDictionary['layerB']
         if not ignoreSpecular:
-            if material.specular_shader == "COOKTORR":
-                materialType = "torrance"
-                keysToRetain = torranceKeys
-                for key in materialKeys:
-                    if key not in keysToRetain:
-                        if workDictionary:
-                            if key in workDictionary:
-                                workDictionary.pop(key)  # Delete Keys from Dict
-                workDictionary['type'] = materialType
-                if 'specular' in textureMap:
-                    absPath = bpy.path.abspath(textureSlots[textureMap['specular']].texture.image.filepath)
-                    finalPath = os.path.relpath(absPath, os.path.dirname(filepath))
-                    finalPath = finalPath.replace("\\", "/")
-                    workDictionary['albedo'] = finalPath
-                else:
-                    workDictionary['albedo'] = [material.specular_color.r, material.specular_color.g, material.specular_color.b]
-                if 'roughness' in textureMap:
-                    absPath = bpy.path.abspath(textureSlots[textureMap['roughness']].texture.image.filepath)
-                    finalPath = os.path.relpath(absPath, os.path.dirname(filepath))
-                    finalPath = finalPath.replace("\\", "/")
-                    workDictionary['roughness'] = finalPath
-                else:
+            materialType = "torrance"
+            for key in materialKeys: # Delete all material keys which might exist due to a change of the material
+                workDictionary.pop(key, None)
+            workDictionary['type'] = materialType
+            if 'specular' in textureMap:
+                workDictionary['albedo'] = make_path_relative_to_root(textureSlots[textureMap['specular']].texture.image.filepath)
+            else:
+                workDictionary['albedo'] = [material.specular_color.r, material.specular_color.g, material.specular_color.b]
+            if 'roughness' in textureMap:
+                workDictionary['roughness'] = make_path_relative_to_root(textureSlots[textureMap['roughness']].texture.image.filepath)
+            else:
+                if material.specular_shader == "COOKTORR":
                     workDictionary['roughness'] = material.specular_hardness / 511  # Max hardness = 511
-                if "ndf" in material:
-                    workDictionary['ndf'] = material["ndf"]
-                else:
-                    workDictionary['ndf'] = "GGX"  # Default normal distribution function
-                currentLayer += 1
-                addedLayer = True
-            else:  # Else we have Fresnel and we have to use a default specular material because ther is no defined
-                materialType = "torrance"
-                keysToRetain = torranceKeys
-                for key in materialKeys:
-                    if key not in keysToRetain:
-                        if workDictionary:
-                            if key in workDictionary:
-                                workDictionary.pop(key)  # Delete Keys from Dict
-                workDictionary['type'] = materialType
-                if 'specular' in textureMap:
-                    absPath = bpy.path.abspath(textureSlots[textureMap['specular']].texture.image.filepath)
-                    finalPath = os.path.relpath(absPath, os.path.dirname(filepath))
-                    finalPath = finalPath.replace("\\", "/")
-                    workDictionary['albedo'] = finalPath
-                else:
-                    workDictionary['albedo'] = [material.specular_color.r, material.specular_color.g, material.specular_color.b]
-                if 'roughness' in textureMap:
-                    absPath = bpy.path.abspath(textureSlots[textureMap['roughness']].texture.image.filepath)
-                    finalPath = os.path.relpath(absPath, os.path.dirname(filepath))
-                    finalPath = finalPath.replace("\\", "/")
-                    workDictionary['roughness'] = finalPath
                 else:
                     workDictionary['roughness'] = 0  # We could have no roughness parameter so we default to 0
-                if "ndf" in material:
-                    workDictionary['ndf'] = material["ndf"]
-                else:
-                    workDictionary['ndf'] = "GGX"  # Default normal distribution function
-                currentLayer += 1
-                addedLayer = True
+            if "ndf" in material:
+                workDictionary['ndf'] = material["ndf"]
+            else:
+                workDictionary['ndf'] = "GGX"  # Default normal distribution function
+            currentLayer += 1
+            addedLayer = True
             if layerCount != 1:  # if blend Material
                 if addedLayer:
                     if layerCount - currentLayer == 0:  # check if current layer was A or B
