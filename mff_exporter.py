@@ -741,13 +741,13 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
                         facesToTriangulate.append(faces[k])
                 bmesh.ops.triangulate(bm, faces=facesToTriangulate[:], quad_method=0, ngon_method=0)
                 # Split vertices if vertex has multiple uv coordinates (is used in multiple triangles)
-                if 'uv_layers' in lodObject.data:
-                    if len(lodObject.data.uv_layers):
-                        # mark seams from uv islands
-                        bpy.ops.uv.seams_from_islands()
-                        seams = [e for e in bm.edges if e.seam]
-                        # split on seams
-                        bmesh.ops.split_edges(bm, edges=seams)
+                # or if it is not smooth
+                if 'uv_layers' in lodObject.data and len(lodObject.data.uv_layers):
+                    # mark seams from uv islands
+                    bpy.ops.uv.seams_from_islands()
+                edgesToSplit = [e for e in bm.edges if e.seam or not e.smooth
+                    or not all(f.smooth for f in e.link_faces)]
+                bmesh.ops.split_edges(bm, edges=edgesToSplit)
 
                 faces = bm.faces  # update faces
                 faces.ensure_lookup_table()
