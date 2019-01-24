@@ -50,6 +50,26 @@ def write_lambert_material(workDictionary, textureMap, material):
             material.diffuse_color.g * material.diffuse_intensity,
             material.diffuse_color.b * material.diffuse_intensity]
 
+def write_vertex_normals(vertexDataArray, mesh, use_compression):
+    if mesh.has_custom_normals:
+        # Create a lookuptable vertex -> any loop
+        vertToLoop = [0] * len(mesh.vertices)
+        for i,l in enumerate(mesh.loops):
+            vertToLoop[l.vertex_index] = l
+        # Write out the normals
+        for k in range(len(mesh.vertices)):
+            normal = vertToLoop[k].normal
+            if use_compression:
+                vertexDataArray.extend(pack_normal32(normal).to_bytes(4, byteorder='little', signed=True))
+            else:
+                vertexDataArray.extend(struct.pack('<3f', *normal))
+    else:
+        for k in range(len(mesh.vertices)):
+            if use_compression:
+                vertexDataArray.extend(pack_normal32(mesh.vertices[k].normal).to_bytes(4, byteorder='little', signed=True))
+            else:
+                vertexDataArray.extend(struct.pack('<3f', *mesh.vertices[k].normal))
+
 
 def export_json(context, self, filepath, binfilepath):
     version = "1.0"
@@ -781,6 +801,8 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
                 # Vertex data
                 vertices = mesh.vertices
                 mesh.calc_normals()
+                if mesh.has_custom_normals:
+                    mesh.calc_normals_split()
                 uvCoordinates = numpy.empty(len(vertices), dtype=object)
                 if len(mesh.uv_layers) == 0:
                     self.report({'WARNING'}, ("LOD Object: \"%s\" has no uv layers." % (lodObject.name)))
@@ -802,11 +824,7 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
                 vertexDataArray = bytearray()  # Used for deflation
                 for k in range(len(vertices)):
                     vertexDataArray.extend(struct.pack('<3f', *mesh.vertices[k].co))
-                for k in range(len(vertices)):
-                    if use_compression:
-                        vertexDataArray.extend(pack_normal32(mesh.vertices[k].normal).to_bytes(4, byteorder='little', signed=True))
-                    else:
-                        vertexDataArray.extend(struct.pack('<3f', *mesh.vertices[k].normal))
+                write_vertex_normals(vertexDataArray, mesh, use_compression)
                 for k in range(len(vertices)):
                     vertexDataArray.extend(struct.pack('<2f', uvCoordinates[k][0], uvCoordinates[k][1]))
                 vertexOutData = vertexDataArray
