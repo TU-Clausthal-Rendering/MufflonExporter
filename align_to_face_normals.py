@@ -1,6 +1,6 @@
 bl_info = {
-    "name": "Align to Face Normals",
-    "description": "Replaces vertex normals of selected faces with the face normals.",
+    "name": "Align Normals",
+    "description": "Replaces vertex normals of selected faces with the face or geometric normals. Details on http://jojendersie.de/blender-align-normals/.",
     "author": "Johannes Jendersie",
     "version": (1, 1),
     "blender": (2, 78, 0),
@@ -80,6 +80,7 @@ class GeoNormalsCalculator(bpy.types.Operator):
                 # Compute new normals for each vertex
                 for i,v in enumerate(f.verts):
                     normal = GeoNormalsCalculator.calc_normal(f.verts, i)
+                    if normal.dot(f.normal) < 0: normal = -normal
                     for l in v.link_loops:
                        # print(l.calc_normal())
                         new_normals[l.index] = normal
