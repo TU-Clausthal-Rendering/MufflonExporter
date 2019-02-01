@@ -100,7 +100,7 @@ def write_torrance_material(workDictionary, textureMap, material, applyFactor):
         workDictionary['roughness'] = make_path_relative_to_root(textureSlots[textureMap['roughness']].texture.image.filepath)
     else:
         if material.specular_shader == "COOKTORR" or material.specular_shader == "PHONG" or material.specular_shader == "BLINN":
-            workDictionary['roughness'] = material.specular_hardness / 511  # Max hardness = 511
+            workDictionary['roughness'] = math.pow(1 - material.specular_hardness / 511, 3)  # Max hardness = 511
         else:
             self.report({'WARNING'}, ("Unsupported specular material: \"%s\". Exporting as Torrance material with roughness 0.1." % (material.name)))
             workDictionary['roughness'] = 0.1  # We have no roughness parameter so we default to 0.1
