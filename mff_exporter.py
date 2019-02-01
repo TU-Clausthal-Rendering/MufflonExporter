@@ -85,19 +85,19 @@ def write_orennayar_material(workDictionary, textureMap, material, applyFactor):
             material.diffuse_color.b * scale]
     workDictionary['roughness'] = material.roughness
 
-def write_torrance_material(workDictionary, textureMap, material, applyFactor):
+def write_torrance_material(workDictionary, textureMap, material, applyFactor, self):
     for key in materialKeys: # Delete all material keys which might exist due to a change of the material
         workDictionary.pop(key, None)
     workDictionary['type'] = "torrance"
     if 'specular' in textureMap:
-        workDictionary['albedo'] = make_path_relative_to_root(textureSlots[textureMap['specular']].texture.image.filepath)
+        workDictionary['albedo'] = make_path_relative_to_root(material.texture_slots[textureMap['specular']].texture.image.filepath)
     else:
         scale = material.specular_intensity if applyFactor else 1.0
         workDictionary['albedo'] = [material.specular_color.r * scale,
                                     material.specular_color.g * scale,
                                     material.specular_color.b * scale]
     if 'roughness' in textureMap:
-        workDictionary['roughness'] = make_path_relative_to_root(textureSlots[textureMap['roughness']].texture.image.filepath)
+        workDictionary['roughness'] = make_path_relative_to_root(material.texture_slots[textureMap['roughness']].texture.image.filepath)
     else:
         if material.specular_shader == "COOKTORR" or material.specular_shader == "PHONG" or material.specular_shader == "BLINN":
             workDictionary['roughness'] = math.pow(1 - material.specular_hardness / 511, 3)  # Max hardness = 511
@@ -114,7 +114,7 @@ def write_walter_material(workDictionary, textureMap, material):
         workDictionary.pop(key, None)
     workDictionary['type'] = "walter"
     if 'roughness' in textureMap:
-        workDictionary['roughness'] = make_path_relative_to_root(textureSlots[textureMap['roughness']].texture.image.filepath)
+        workDictionary['roughness'] = make_path_relative_to_root(material.texture_slots[textureMap['roughness']].texture.image.filepath)
     else:
         workDictionary['roughness'] = (1 - material.raytrace_transparency.gloss_factor)
     if "ndf" in material:
@@ -147,7 +147,7 @@ def write_emissive_material(workDictionary, textureMap, material):
         workDictionary.pop(key, None)
     workDictionary['type'] = "emissive"
     if 'emissive' in textureMap:
-        workDictionary['radiance'] = make_path_relative_to_root(textureSlots[textureMap['emissive']].texture.image.filepath)
+        workDictionary['radiance'] = make_path_relative_to_root(material.texture_slots[textureMap['emissive']].texture.image.filepath)
     else:
         workDictionary['radiance'] = [material.diffuse_color.r, material.diffuse_color.g, material.diffuse_color.b]
     workDictionary['scale'] = [material.emit, material.emit, material.emit]
@@ -380,7 +380,7 @@ def export_json(context, self, filepath, binfilepath):
         for j in range(len( material.texture_slots)):
             if not material.use_textures[j]:
                 continue
-            textureSlot =  material.texture_slots[j]
+            textureSlot = material.texture_slots[j]
             if textureSlot is None:
                 continue
             if textureSlot.texture.type != "IMAGE":
@@ -392,22 +392,22 @@ def export_json(context, self, filepath, binfilepath):
                 continue
             if textureSlot.use_map_color_diffuse:
                 if 'diffuse' in textureMap:
-                    self.report({'WARNING'}, ("Too many diffuse textures: \"%s\",\"%s\" from material: \"%s\"." % (textureSlots[textureMap['diffuse']].name, textureSlot.name, material.name)))
+                    self.report({'WARNING'}, ("Too many diffuse textures: \"%s\",\"%s\" from material: \"%s\"." % (material.texture_slots[textureMap['diffuse']].name, textureSlot.name, material.name)))
                 else:
                     textureMap['diffuse'] = j
             if textureSlot.use_map_color_spec:
                 if 'specular' in textureMap:
-                    self.report({'WARNING'}, ("Too many specular textures: \"%s\",\"%s\" from material: \"%s\"." % (textureSlots[textureMap['specular']].name, textureSlot.name, material.name)))
+                    self.report({'WARNING'}, ("Too many specular textures: \"%s\",\"%s\" from material: \"%s\"." % (material.texture_slots[textureMap['specular']].name, textureSlot.name, material.name)))
                 else:
                     textureMap['specular'] = j
             if textureSlot.use_map_emit:
                 if 'emissive' in textureMap:
-                    self.report({'WARNING'}, ("Too many emissive textures: \"%s\",\"%s\" from material: \"%s\"." % (textureSlots[textureMap['emissive']].name, textureSlot.name, material.name)))
+                    self.report({'WARNING'}, ("Too many emissive textures: \"%s\",\"%s\" from material: \"%s\"." % (material.texture_slots[textureMap['emissive']].name, textureSlot.name, material.name)))
                 else:
                     textureMap['emissive'] = j
             if textureSlot.use_map_hardness:
                 if 'roughness' in textureMap:
-                    self.report({'WARNING'}, ("Too many roughness textures: \"%s\",\"%s\" from material: \"%s\"." % (textureSlots[textureMap['roughness']].name, textureSlot.name, material.name)))
+                    self.report({'WARNING'}, ("Too many roughness textures: \"%s\",\"%s\" from material: \"%s\"." % (material.texture_slots[textureMap['roughness']].name, textureSlot.name, material.name)))
                 else:
                     textureMap['roughness'] = j
 
@@ -436,23 +436,23 @@ def export_json(context, self, filepath, binfilepath):
             if hasRefraction or hasDiffuse:
                 if useFresnel:
                     write_fresnel_material(workDictionary, textureMap, material)
-                    write_torrance_material(workDictionary['layerReflection'], textureMap, material, True)
+                    write_torrance_material(workDictionary['layerReflection'], textureMap, material, True, self)
                     workDictionary = workDictionary['layerRefraction']
                     # TODO: export glass instead
                 else:
                     factorB = 1-material.specular_intensity if hasRefraction else material.diffuse_intensity
                     applyDiffuseScale = False # in both cases: if Refr+Diffuse the diffuse_intensity will also be used as blend factor.
                     write_blend_material(workDictionary, textureMap, material, material.specular_intensity, factorB)
-                    write_torrance_material(workDictionary['layerA'], textureMap, material, False)
+                    write_torrance_material(workDictionary['layerA'], textureMap, material, False, self)
                     workDictionary = workDictionary['layerB']
             else: # No further layers/blending
                 if useFresnel:  # Use a second empty layer in fresnel
                     write_fresnel_material(workDictionary, textureMap, material)
-                    write_torrance_material(workDictionary['layerReflection'], textureMap, material, True)
+                    write_torrance_material(workDictionary['layerReflection'], textureMap, material, True, self)
                     workDictionary['layerRefraction']['type'] = "lambert"
                     workDictionary['layerRefraction']['albedo'] = [0,0,0]
                 else:
-                    write_torrance_material(workDictionary, textureMap, material, True)
+                    write_torrance_material(workDictionary, textureMap, material, True, self)
 
         if hasRefraction:
             if hasDiffuse: # one last blending necessary
