@@ -527,9 +527,9 @@ def export_json(context, self, filepath, binfilepath, use_selection):
         if scene.name not in dataDictionary['scenarios']:
             dataDictionary['scenarios'][scene.name] = collections.OrderedDict()
         cameraName = ''  # type: str
-        if 'name' in scene.camera:
+        if hasattr(scene.camera, 'name'):
             if scene.camera.data.type == "PERSP" or scene.camera.data.type == "ORTHO":
-                cameraName = scn.camera.name
+                cameraName = scene.camera.name
             else:
                 cameraName = next(iter(dataDictionary['cameras']))  # gets first camera in dataDictionary
                 # dataDictionary['cameras'] has at least 1 element otherwise the program would have exited earlier
