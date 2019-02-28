@@ -18,7 +18,7 @@ bl_info = {
     "name": "Mufflon Exporter",
     "description": "Exporter for the custom Mufflon file format",
     "author": "Marvin",
-    "version": (1, 0),
+    "version": (1, 1),
     "blender": (2, 69, 0),
     "location": "File > Export > Mufflon (.json/.mff)",
     "category": "Import-Export"
@@ -175,8 +175,8 @@ def write_vertex_normals(vertexDataArray, mesh, use_compression):
                 vertexDataArray.extend(struct.pack('<3f', *mesh.vertices[k].normal))
 
 
-def export_json(context, self, filepath, binfilepath):
-    version = "1.0"
+def export_json(context, self, filepath, binfilepath, use_selection):
+    version = "1.1"
     binary = os.path.relpath(binfilepath, os.path.commonpath([filepath, binfilepath]))
     global rootFilePath; rootFilePath = os.path.dirname(filepath)
 
@@ -471,34 +471,101 @@ def export_json(context, self, filepath, binfilepath):
             write_lambert_material(workDictionary, textureMap, material, applyDiffuseScale)
 
     # Scenarios
-    if len(bpy.data.scenes) > 1:
-        self.report({'WARNING'}, ("Multiple scenes found. Only exporting active scene."))
-    if scn.name not in dataDictionary['scenarios']:
-        dataDictionary['scenarios'][scn.name] = collections.OrderedDict()
-    cameraName = ''  # type: str
-    if 'name' in scn.camera:
-        if scn.camera.data.type == "PERSP" or scn.camera.data.type == "ORTHO":
-            cameraName = scn.camera.name
+
+    # Make a dict with all instances
+    if use_selection:
+        tempObjects = bpy.context.selected_objects
+    else:
+        tempObjects = bpy.data.objects
+
+    objects = []
+    for obj in tempObjects:
+        if obj.users != 0:
+            objects.append(obj)
+
+    usedMeshes = []
+    for i in range(len(objects)):
+        currentObject = objects[i]
+        if currentObject.type != "MESH" and "sphere" not in currentObject:  # If mesh or sphere
+            continue
+        if currentObject.data in usedMeshes:
+            continue
+        if len(currentObject.lod_levels) != 0:  # if object has LOD levels
+            if currentObject.type != "MESH" and "sphere" in currentObject:  # skip object with data doesnt work for meshes
+                tempMesh = currentObject.to_mesh(bpy.context.scene, True, calc_tessface=False,
+                                                 settings='RENDER')  # excepts if object has no geometry and is mesh but returns None for none Mesh
+                if tempMesh is not None:
+                    if len(currentObject.data.vertices) != 0:
+                        bpy.data.meshes.remove(tempMesh)
+                        continue
+            elif len(
+                    currentObject.data.vertices) != 0:  # if it has data ( objects with LOD have no data, but the LODs are objects too and have data skip them) works only for meshes
+                continue
+        usedMeshes.append(currentObject.data)
+
+    instances = []
+    for i in range(len(objects)):
+        currentObject = objects[i]
+        if currentObject.type != "MESH" and "sphere" not in currentObject:
+            continue
+        if currentObject.type != "MESH" and "sphere" in currentObject:  # doesnt work for meshes
+            tempMesh = currentObject.to_mesh(bpy.context.scene, True, calc_tessface=False,
+                                             settings='RENDER')  # excepts if object has no geometry and is mesh but returns None for none Mesh
+            if tempMesh is None:
+                continue
+            bpy.data.meshes.remove(tempMesh)
+        if len(currentObject.lod_levels) != 0:  # if object has LOD levels
+            if not hasattr(currentObject.data, 'vertices'):
+                continue
+            if len(
+                    currentObject.data.vertices) != 0:  # if it has data ( objects with LOD have no data, but the LODs are objects too and have data skip them)
+                continue
+        if currentObject.data in usedMeshes:
+            instances.append(currentObject.name)
+
+    for scene in bpy.data.scenes:
+        if scene.name not in dataDictionary['scenarios']:
+            dataDictionary['scenarios'][scene.name] = collections.OrderedDict()
+        cameraName = ''  # type: str
+        if 'name' in scene.camera:
+            if scene.camera.data.type == "PERSP" or scene.camera.data.type == "ORTHO":
+                cameraName = scn.camera.name
+            else:
+                cameraName = next(iter(dataDictionary['cameras']))  # gets first camera in dataDictionary
+                # dataDictionary['cameras'] has at least 1 element otherwise the program would have exited earlier
         else:
             cameraName = next(iter(dataDictionary['cameras']))  # gets first camera in dataDictionary
-            # dataDictionary['cameras'] has at least 1 element otherwise the program would have exited earlier
-    else:
-        cameraName = next(iter(dataDictionary['cameras']))  # gets first camera in dataDictionary
 
-    dataDictionary['scenarios'][scn.name]['camera'] = cameraName
-    dataDictionary['scenarios'][scn.name]['resolution'] = [scn.render.resolution_x, scn.render.resolution_y]
+        dataDictionary['scenarios'][scene.name]['camera'] = cameraName
+        dataDictionary['scenarios'][scene.name]['resolution'] = [scene.render.resolution_x, scene.render.resolution_y]
 
-    dataDictionary['scenarios'][scn.name]['lights'] = lightNames
-    dataDictionary['scenarios'][scn.name]['lod'] = 0
-    # Material assignments
-    if 'materialAssignments' not in dataDictionary['scenarios'][scn.name]:
-        dataDictionary['scenarios'][scn.name]['materialAssignments'] = collections.OrderedDict()
-    for material in dataDictionary['materials']:
-        dataDictionary['scenarios'][scn.name]['materialAssignments'][material] = material
+        dataDictionary['scenarios'][scene.name]['lights'] = lightNames
+        dataDictionary['scenarios'][scene.name]['lod'] = 0
+        # Material assignments
+        if 'materialAssignments' not in dataDictionary['scenarios'][scene.name]:
+            dataDictionary['scenarios'][scene.name]['materialAssignments'] = collections.OrderedDict()
+        for material in dataDictionary['materials']:
+            dataDictionary['scenarios'][scene.name]['materialAssignments'][material] = material
 
-    # Object properties
-    if 'objectProperties' not in dataDictionary['scenarios'][scn.name]:
-        dataDictionary['scenarios'][scn.name]['objectProperties'] = collections.OrderedDict()
+        # Object properties
+        if 'objectProperties' not in dataDictionary['scenarios'][scene.name]:
+            dataDictionary['scenarios'][scene.name]['objectProperties'] = collections.OrderedDict()
+
+        # Instance properties
+        if 'instanceProperties' not in dataDictionary['scenarios'][scene.name]:
+            dataDictionary['scenarios'][scene.name]['instanceProperties'] = collections.OrderedDict()
+
+        sceneObjectNames = []
+
+        for object in scene.objects:
+            sceneObjectNames.append(object.name)
+
+        for instance in instances:
+            if instance not in sceneObjectNames:
+                if instance not in dataDictionary['scenarios'][scene.name]['instanceProperties']:
+                    dataDictionary['scenarios'][scene.name]['instanceProperties'][instance] = collections.OrderedDict()
+                dataDictionary['scenarios'][scene.name]['instanceProperties'][instance]['mask'] = True
+
 
     # CustomJSONEncoder: Custom float formater (default values will be like 0.2799999994039535)
     # and which packs small arrays in one line
@@ -1034,7 +1101,7 @@ def export_mufflon(context, self, filepath, use_selection, use_compression,
                    use_deflation):
     filename = os.path.splitext(filepath)[0]
     binfilepath = filename + ".mff"
-    if export_json(context, self, filepath, binfilepath) == 0:
+    if export_json(context, self, filepath, binfilepath, use_selection) == 0:
         print("Succeeded exporting JSON")
         if export_binary(context, self, binfilepath, use_selection,
                          use_compression, use_deflation) == 0:
