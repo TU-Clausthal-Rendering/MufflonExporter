@@ -175,7 +175,7 @@ def write_vertex_normals(vertexDataArray, mesh, use_compression):
                 vertexDataArray.extend(struct.pack('<3f', *mesh.vertices[k].normal))
 
 
-def export_json(context, self, filepath, binfilepath, use_selection):
+def export_json(context, self, filepath, binfilepath, use_selection, overwrite_default_scenario):
     version = "1.1"
     binary = os.path.relpath(binfilepath, os.path.commonpath([filepath, binfilepath]))
     global rootFilePath; rootFilePath = os.path.dirname(filepath)
@@ -195,6 +195,10 @@ def export_json(context, self, filepath, binfilepath, use_selection):
             return -1
         dataDictionary['version'] = version
         dataDictionary['binary'] = binary
+        if overwrite_default_scenario or not ('defaultScenario' in oldData):
+            dataDictionary['defaultScenario'] = context.scene.name
+        else:
+            dataDictionary['defaultScenario'] = oldData['defaultScenario']
         dataDictionary['cameras'] = oldData['cameras']
         dataDictionary['lights'] = oldData['lights']
         dataDictionary['materials'] = oldData['materials']
@@ -202,6 +206,7 @@ def export_json(context, self, filepath, binfilepath, use_selection):
     else:
         dataDictionary['version'] = version
         dataDictionary['binary'] = binary
+        dataDictionary['defaultScenario'] = context.scene.name
         dataDictionary['cameras'] = collections.OrderedDict()
         dataDictionary['lights'] = collections.OrderedDict()
         dataDictionary['materials'] = collections.OrderedDict()
@@ -1098,10 +1103,10 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
 
 
 def export_mufflon(context, self, filepath, use_selection, use_compression,
-                   use_deflation):
+                   use_deflation, overwrite_default_scenario):
     filename = os.path.splitext(filepath)[0]
     binfilepath = filename + ".mff"
-    if export_json(context, self, filepath, binfilepath, use_selection) == 0:
+    if export_json(context, self, filepath, binfilepath, use_selection, overwrite_default_scenario) == 0:
         print("Succeeded exporting JSON")
         if export_binary(context, self, binfilepath, use_selection,
                          use_compression, use_deflation) == 0:
@@ -1165,11 +1170,17 @@ class MufflonExporter(Operator, ExportHelper):
             description="Use deflation to reduce file size",
             default=False,
             )
+    overwrite_default_scenario = BoolProperty(
+            name="Overwrite default scenario",
+            description="Overwrite the default scenario when exporting JSON if already set",
+            default=True,
+            )
     path_mode = path_reference_mode
 
     def execute(self, context):
         return export_mufflon(context, self, self.filepath, self.use_selection,
-                              self.use_deflation, self.use_compression)
+                              self.use_deflation, self.use_compression,
+                              self.overwrite_default_scenario)
 
 
 # Only needed if you want to add into a dynamic menu
