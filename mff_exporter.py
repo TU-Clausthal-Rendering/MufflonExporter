@@ -590,6 +590,8 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
 
 def export_binary(context, self, filepath, use_selection, use_deflation, use_compression, triangulate):
     scn = context.scene
+    # Because there are some weird context issues when scene 0 is not selected
+    bpy.context.screen.scene = bpy.data.scenes[0]
     # Binary
     binary = bytearray()
     # Materials Header
@@ -781,7 +783,7 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
             # Type
             binary.extend("LOD_".encode())
             scn.objects.active = lodObject
-            mode = context.active_object.mode
+            mode = context.object.mode
             bpy.ops.object.mode_set(mode='EDIT')
             if "sphere" not in lodObject:
                 mesh = lodObject.to_mesh(scn, True, calc_tessface=False, settings='RENDER')  # applies all modifiers
@@ -1095,6 +1097,8 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
     numberOfInstancesBytes = numberOfInstances.to_bytes(4, byteorder='little')
     for i in range(4):
         binary[numberOfInstancesBinaryPosition + i] = numberOfInstancesBytes[i]
+    # Reset scene
+    bpy.context.screen.scene = scn
     # Write binary to file
     binFile = open(filepath, 'bw')
     binFile.write(binary)
