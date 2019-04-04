@@ -417,7 +417,7 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
                     textureMap['roughness'] = j
 
         # Check for Multi-Layer material
-        hasRefraction = material.use_transparency
+        hasRefraction = material.use_transparency and (material.alpha < 1)
         hasReflection = material.specular_intensity > 0
         hasDiffuse = material.diffuse_intensity > 0 and (material.diffuse_color.r > 0
                                                       or material.diffuse_color.g > 0
@@ -588,7 +588,7 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
 #   #  #  #  #  ##  #######  #  #    #
 #   ###   #  #   #  #     #  #  #    #
 
-def export_binary(context, self, filepath, use_selection, use_deflation, use_compression):
+def export_binary(context, self, filepath, use_selection, use_deflation, use_compression, triangulate):
     scn = context.scene
     # Binary
     binary = bytearray()
@@ -791,7 +791,7 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
                 faces.ensure_lookup_table()
                 facesToTriangulate = []
                 for k in range(len(faces)):
-                    if len(faces[k].edges) > 4:
+                    if len(faces[k].edges) > 4 or (triangulate and len(faces[k].edges) > 3):
                         facesToTriangulate.append(faces[k])
                 bmesh.ops.triangulate(bm, faces=facesToTriangulate[:], quad_method=0, ngon_method=0)
                 # Split vertices if vertex has multiple uv coordinates (is used in multiple triangles)
@@ -861,7 +861,7 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
                 if len(mesh.uv_layers) == 0:
                     self.report({'WARNING'}, ("LOD Object: \"%s\" has no uv layers." % (lodObject.name)))
                     for k in range(len(uvCoordinates)):
-                        theta = math.acos(vertices[k].co[1]/(math.sqrt((vertices[k].co[0]*vertices[k].co[0]) + (vertices[k].co[1]*vertices[k].co[1]) + (vertices[k].co[2]*vertices[k].co[2]))))
+                        theta = math.acos(vertices[k].co[1]/((1e-20 + math.sqrt((vertices[k].co[0]*vertices[k].co[0]) + (vertices[k].co[1]*vertices[k].co[1]) + (vertices[k].co[2]*vertices[k].co[2])))))
                         phi = numpy.arctan2(vertices[k].co[2], vertices[k].co[0])
                         if theta < 0:
                             theta += math.pi
@@ -1103,13 +1103,13 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
 
 
 def export_mufflon(context, self, filepath, use_selection, use_compression,
-                   use_deflation, overwrite_default_scenario):
+                   use_deflation, overwrite_default_scenario, triangulate):
     filename = os.path.splitext(filepath)[0]
     binfilepath = filename + ".mff"
     if export_json(context, self, filepath, binfilepath, use_selection, overwrite_default_scenario) == 0:
         print("Succeeded exporting JSON")
         if export_binary(context, self, binfilepath, use_selection,
-                         use_compression, use_deflation) == 0:
+                         use_compression, use_deflation, triangulate) == 0:
             print("Succeeded exporting binary")
         else:
             print("Failed exporting binary")
@@ -1170,6 +1170,11 @@ class MufflonExporter(Operator, ExportHelper):
             description="Use deflation to reduce file size",
             default=False,
             )
+    triangulate = BoolProperty(
+            name="Triangulate",
+            description="Triangulates all exported objects",
+            default=False,
+            )
     overwrite_default_scenario = BoolProperty(
             name="Overwrite default scenario",
             description="Overwrite the default scenario when exporting JSON if already set",
@@ -1180,7 +1185,7 @@ class MufflonExporter(Operator, ExportHelper):
     def execute(self, context):
         return export_mufflon(context, self, self.filepath, self.use_selection,
                               self.use_deflation, self.use_compression,
-                              self.overwrite_default_scenario)
+                              self.overwrite_default_scenario, self.triangulate)
 
 
 # Only needed if you want to add into a dynamic menu
