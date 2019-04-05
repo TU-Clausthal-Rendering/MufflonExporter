@@ -17,7 +17,7 @@ from collections.abc import Mapping, Sequence
 bl_info = {
     "name": "Mufflon Exporter",
     "description": "Exporter for the custom Mufflon file format",
-    "author": "Marvin",
+    "author": "Marvin, Johannes Jendersie, Florian Bethe",
     "version": (1, 1),
     "blender": (2, 69, 0),
     "location": "File > Export > Mufflon (.json/.mff)",
@@ -590,8 +590,6 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
 
 def export_binary(context, self, filepath, use_selection, use_deflation, use_compression, triangulate):
     scn = context.scene
-    # Because there are some weird context issues when scene 0 is not selected
-    bpy.context.screen.scene = bpy.data.scenes[0]
     # Binary
     binary = bytearray()
     # Materials Header
@@ -648,14 +646,9 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
 
     countOfObjects = 0
     if use_selection:
-        tempObjects = bpy.context.selected_objects
+        objects = [obj for obj in bpy.context.selected_objects if obj.users > 0]
     else:
-        tempObjects = bpy.data.objects
-
-    objects = []
-    for obj in tempObjects:
-        if obj.users != 0:
-            objects.append(obj)
+        objects = [obj for obj in bpy.data.objects if obj.users > 0]
 
     usedMeshes = []
     for i in range(len(objects)):
@@ -685,7 +678,7 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
 
     currentObjectNumber = 0
     usedMeshes = []
-    activeObject = scn.objects.active
+    activeObject = scn.objects.active   # Keep this for resetting later
     for i in range(len(objects)):
         currentObject = objects[i]
         if currentObject.type != "MESH" and "sphere" not in currentObject:  # If mesh or sphere
@@ -724,7 +717,6 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
         # Bounding box
 
         # Calculate Lod chain to get bounding box over all Lods
-
         lodLevels = []
         lodChainStart = 0
         if len(currentObject.lod_levels) != 0:  # if it has Lod levels check depth of Lod levels
@@ -752,7 +744,6 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
         boundingBoxMax = [boundingBox[7][0], boundingBox[7][1], boundingBox[7][2]]
 
         for lodObject in lodLevels:
-
             boundingBox = lodObject.bound_box
             # Set bounding box min/max to last element of the bb
             # boundingBoxMin = flip_space((boundingBox[7][0], boundingBox[7][1], boundingBox[7][2]))
@@ -782,8 +773,10 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
                 binary[lodStartBinaryPosition + k + j*8] = lodStartPosition[k]
             # Type
             binary.extend("LOD_".encode())
-            scn.objects.active = lodObject
-            mode = context.object.mode
+            # Needs to set the target object to active, to be able to apply changes.
+            bpy.context.screen.scene = lodObject.users_scene[0] # Choose a valid scene which contains the object
+            bpy.context.scene.objects.active = lodObject
+            mode = lodObject.mode
             bpy.ops.object.mode_set(mode='EDIT')
             if "sphere" not in lodObject:
                 mesh = lodObject.to_mesh(scn, True, calc_tessface=False, settings='RENDER')  # applies all modifiers
@@ -1162,7 +1155,7 @@ class MufflonExporter(Operator, ExportHelper):
     use_selection = BoolProperty(
             name="Selection Only",
             description="Export selected objects only",
-            default=True,
+            default=False,
             )
     use_compression = BoolProperty(
             name="Compress normals",
