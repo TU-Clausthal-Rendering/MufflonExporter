@@ -338,23 +338,27 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
         else:
             self.report({'WARNING'}, ("Skipping unsupported lamp type: \"%s\" from: \"%s\"." % (lamp.type, lamp.name)))
             continue
-    world = scn.world
-    worldTextureSlot = world.texture_slots[world.active_texture_index]
-    if worldTextureSlot is not None:
-        if worldTextureSlot.texture is not None:
-            if worldTextureSlot.texture.type != "IMAGE":
-                self.report({'WARNING'}, ("Skipping environment map: \"%s\" because it is not an image." % worldTextureSlot.texture.name))
-            else:
-                if worldTextureSlot.texture.image is None:
-                    self.report({'WARNING'}, ("Skipping environment map: \"%s\" because it has no image." % worldTextureSlot.texture.name))
+
+    for scene in bpy.data.scenes:
+        world = scene.world
+        worldTextureSlot = world.texture_slots[world.active_texture_index]
+        if worldTextureSlot is not None:
+            if worldTextureSlot.texture is not None:
+                if worldTextureSlot.texture.type != "IMAGE":
+                    self.report({'WARNING'}, ("Skipping environment map: \"%s\" because it is not an image." % worldTextureSlot.texture.name))
                 else:
-                    lightNames.append(worldTextureSlot.texture.name)
-                    dataDictionary['lights'][worldTextureSlot.texture.name] = collections.OrderedDict()
-                    finalPath = make_path_relative_to_root(worldTextureSlot.texture.image.filepath)
-                    lightType = "envmap"
-                    dataDictionary['lights'][worldTextureSlot.texture.name]["type"] = lightType
-                    dataDictionary['lights'][worldTextureSlot.texture.name]["map"] = finalPath
-                    dataDictionary['lights'][worldTextureSlot.texture.name]["scale"] = worldTextureSlot.horizon_factor
+                    if worldTextureSlot.texture.image is None:
+                        self.report({'WARNING'}, ("Skipping environment map: \"%s\" because it has no image." % worldTextureSlot.texture.name))
+                    else:
+                        if worldTextureSlot.texture.name not in lightNames:
+                            lightNames.append(worldTextureSlot.texture.name)
+                            dataDictionary['lights'][worldTextureSlot.texture.name] = collections.OrderedDict()
+                            finalPath = make_path_relative_to_root(worldTextureSlot.texture.image.filepath)
+                            lightType = "envmap"
+                            dataDictionary['lights'][worldTextureSlot.texture.name]["type"] = lightType
+                            dataDictionary['lights'][worldTextureSlot.texture.name]["map"] = finalPath
+                            dataDictionary['lights'][worldTextureSlot.texture.name]["scale"] = worldTextureSlot.horizon_factor
+
 
     # Materials
 
@@ -423,8 +427,8 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
                                                       or material.diffuse_color.g > 0
                                                       or material.diffuse_color.b > 0)
         hasEmission = material.emit > 0
-        useFresnel = (material.diffuse_shader == "FRESNEL") or (material.raytrace_transparency.fresnel > 0) # TODO: more options to enable fresnel?
-        applyDiffuseScale = True # Conditional replaced later if intensity is used as a blend factor
+        useFresnel = (material.diffuse_shader == "FRESNEL") or (material.raytrace_transparency.fresnel > 0)  # TODO: more options to enable fresnel?
+        applyDiffuseScale = True  # Conditional replaced later if intensity is used as a blend factor
 
         # Check which combination is given and export the appropriate material
         if hasEmission: 
@@ -529,6 +533,7 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
             instances.append(currentObject.name)
 
     for scene in bpy.data.scenes:
+        world = scene.world
         if scene.name not in dataDictionary['scenarios']:
             dataDictionary['scenarios'][scene.name] = collections.OrderedDict()
         cameraName = ''  # type: str
@@ -544,7 +549,18 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
         dataDictionary['scenarios'][scene.name]['camera'] = cameraName
         dataDictionary['scenarios'][scene.name]['resolution'] = [scene.render.resolution_x, scene.render.resolution_y]
 
-        dataDictionary['scenarios'][scene.name]['lights'] = lightNames
+        sceneLightNames = []
+        for sceneObject in scene.objects:
+            if sceneObject.name in lightNames:
+                sceneLightNames.append(sceneObject.name)
+
+        worldTextureSlot = world.texture_slots[world.active_texture_index]
+        if worldTextureSlot is not None:
+            if worldTextureSlot.texture is not None:
+                if worldTextureSlot.texture.name in lightNames:
+                    sceneLightNames.append(worldTextureSlot.texture.name)
+
+        dataDictionary['scenarios'][scene.name]['lights'] = sceneLightNames
         dataDictionary['scenarios'][scene.name]['lod'] = 0
         # Material assignments
         if 'materialAssignments' not in dataDictionary['scenarios'][scene.name]:
