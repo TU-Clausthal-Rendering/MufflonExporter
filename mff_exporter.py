@@ -777,6 +777,7 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
         # Number of entries in table
         binary.extend((len(lodLevels)).to_bytes(4, byteorder='little'))
         lodStartBinaryPosition = len(binary)
+        print(objectName)
         for j in range(len(lodLevels)):
             binary.extend((0).to_bytes(8, byteorder='little'))  # has to be corrected when the value is known
         for j in range(len(lodLevels)):
@@ -788,6 +789,8 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
             # Type
             binary.extend("LOD_".encode())
             # Needs to set the target object to active, to be able to apply changes.
+            if len(lodObject.users_scene) < 1:
+                continue
             bpy.context.screen.scene = lodObject.users_scene[0] # Choose a valid scene which contains the object
             bpy.context.scene.objects.active = lodObject
             mode = lodObject.mode
