@@ -222,32 +222,32 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
             continue
         if camera.type == "PERSP":
             aperture = camera.gpu_dof.fstop
-            if camera.name not in dataDictionary['cameras']:
-                dataDictionary['cameras'][camera.name] = collections.OrderedDict()
+            if cameraObject.name not in dataDictionary['cameras']:
+                dataDictionary['cameras'][cameraObject.name] = collections.OrderedDict()
             if aperture == 128.0:
                 cameraType = "pinhole"
-                dataDictionary['cameras'][camera.name]['type'] = cameraType
+                dataDictionary['cameras'][cameraObject.name]['type'] = cameraType
                 fov = camera.angle * 180 / 3.141592653589793  # convert rad to degree
                 fov = fov * scn.render.resolution_y / scn.render.resolution_x # correct aspect ratio
-                dataDictionary['cameras'][camera.name]['fov'] = fov
+                dataDictionary['cameras'][cameraObject.name]['fov'] = fov
             else:
                 cameraType = "focus"
-                dataDictionary['cameras'][camera.name]['type'] = cameraType
-                dataDictionary['cameras'][camera.name]['focalLength'] = camera.lens
-                dataDictionary['cameras'][camera.name]['chipHeight'] = camera.sensor_height
-                dataDictionary['cameras'][camera.name]['focusDistance'] = camera.dof_distance
-                dataDictionary['cameras'][camera.name]['aperture'] = aperture
+                dataDictionary['cameras'][cameraObject.name]['type'] = cameraType
+                dataDictionary['cameras'][cameraObject.name]['focalLength'] = camera.lens
+                dataDictionary['cameras'][cameraObject.name]['chipHeight'] = camera.sensor_height
+                dataDictionary['cameras'][cameraObject.name]['focusDistance'] = camera.dof_distance
+                dataDictionary['cameras'][cameraObject.name]['aperture'] = aperture
         elif camera.type == "ORTHO":
-            if camera.name not in dataDictionary['cameras']:
-                dataDictionary['cameras'][camera.name] = collections.OrderedDict()
+            if cameraObject.name not in dataDictionary['cameras']:
+                dataDictionary['cameras'][cameraObject.name] = collections.OrderedDict()
             cameraType = "ortho"
-            dataDictionary['cameras'][camera.name]['type'] = cameraType
+            dataDictionary['cameras'][cameraObject.name]['type'] = cameraType
             orthoWidth = camera.ortho_scale
-            dataDictionary['cameras'][camera.name]['width'] = orthoWidth
+            dataDictionary['cameras'][cameraObject.name]['width'] = orthoWidth
             orthoHeight = scn.render.resolution_y / scn.render.resolution_x * orthoWidth  # get aspect ratio via resolution
-            dataDictionary['cameras'][camera.name]['height'] = orthoHeight
+            dataDictionary['cameras'][cameraObject.name]['height'] = orthoHeight
         else:
-            self.report({'WARNING'}, ("Skipping unsupported camera type: \"%s\" from: \"%s\"." % (camera.type, camera.name)))
+            self.report({'WARNING'}, ("Skipping unsupported camera type: \"%s\" from: \"%s\"." % (camera.type, cameraObject.name)))
             continue
         cameraPath = []
         viewDirectionPath = []
@@ -269,9 +269,9 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
             viewDirectionPath.append(flip_space(viewDirection))
             up = rot * Vector((0.0, 1.0, 0.0))
             upPath.append(flip_space(up))
-        dataDictionary['cameras'][camera.name]['path'] = cameraPath
-        dataDictionary['cameras'][camera.name]['viewDir'] = viewDirectionPath
-        dataDictionary['cameras'][camera.name]['up'] = upPath
+        dataDictionary['cameras'][cameraObject.name]['path'] = cameraPath
+        dataDictionary['cameras'][cameraObject.name]['viewDir'] = viewDirectionPath
+        dataDictionary['cameras'][cameraObject.name]['up'] = upPath
 
     if len(dataDictionary['cameras']) == 0:
         self.report({'ERROR'}, "No camera found.")  # Stop if no camera was exported
@@ -287,57 +287,55 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
         if lamp.users == 0:
             continue
         if lamp.type == "POINT":
-            lightNames.append(lamp.name)
-            if lamp.name not in dataDictionary['lights']:
-                dataDictionary['lights'][lamp.name] = collections.OrderedDict()
+            if lampObject.name not in dataDictionary['lights']:
+                dataDictionary['lights'][lampObject.name] = collections.OrderedDict()
             if lamp.active_texture is not None:
                 lampTextureSlot = lamp.texture_slots[lamp.active_texture_index]
                 if lampTextureSlot.texture.type != "IMAGE":
-                    self.report({'WARNING'}, ("Skipping goniometric lamp: \"%s\" because Texture: \"%s\" is not an image." % (lamp.name, lampTextureSlot.texture.name)))
+                    self.report({'WARNING'}, ("Skipping goniometric lamp: \"%s\" because Texture: \"%s\" is not an image." % (lampObject.name, lampTextureSlot.texture.name)))
                 else:
                     if lampTextureSlot.texture.image is None:
-                        self.report({'WARNING'}, ("Skipping goniometric lamp: \"%s\" because Texture: \"%s\" has no image." % (lamp.name, lampTextureSlot.texture.name)))
+                        self.report({'WARNING'}, ("Skipping goniometric lamp: \"%s\" because Texture: \"%s\" has no image." % (lampObject.name, lampTextureSlot.texture.name)))
                     else:
                         lightType = "goniometric"
-                        dataDictionary['lights'][lamp.name]['type'] = lightType
-                        dataDictionary['lights'][lamp.name]['position'] = flip_space(lampObject.location)
+                        dataDictionary['lights'][lampObject.name]['type'] = lightType
+                        dataDictionary['lights'][lampObject.name]['position'] = flip_space(lampObject.location)
                         finalPath = make_path_relative_to_root(lampTextureSlot.texture.image.filepath)
-                        dataDictionary['lights'][lamp.name]['map'] = finalPath
-                        dataDictionary['lights'][lamp.name]['scale'] = lamp.energy
+                        dataDictionary['lights'][lampObject.name]['map'] = finalPath
+                        dataDictionary['lights'][lampObject.name]['scale'] = lamp.energy
             else:
                 lightType = "point"
-                dataDictionary['lights'][lamp.name]['type'] = lightType
-                dataDictionary['lights'][lamp.name]['position'] = flip_space(lampObject.location)
-                dataDictionary['lights'][lamp.name]['intensity'] = [lamp.color.r, lamp.color.g, lamp.color.b]
-                dataDictionary['lights'][lamp.name]['scale'] = lamp.energy
+                dataDictionary['lights'][lampObject.name]['type'] = lightType
+                dataDictionary['lights'][lampObject.name]['position'] = flip_space(lampObject.location)
+                dataDictionary['lights'][lampObject.name]['intensity'] = [lamp.color.r, lamp.color.g, lamp.color.b]
+                dataDictionary['lights'][lampObject.name]['scale'] = lamp.energy
         elif lamp.type == "SUN":
-            lightNames.append(lamp.name)
-            if lamp.name not in dataDictionary['lights']:
-                dataDictionary['lights'][lamp.name] = collections.OrderedDict()
+            if lampObject.name not in dataDictionary['lights']:
+                dataDictionary['lights'][lampObject.name] = collections.OrderedDict()
             lightType = "directional"
-            dataDictionary['lights'][lamp.name]['type'] = lightType
+            dataDictionary['lights'][lampObject.name]['type'] = lightType
             viewDirection = lampObject.matrix_world.to_quaternion() * Vector((0.0, 0.0, -1.0))
-            dataDictionary['lights'][lamp.name]['direction'] = flip_space(viewDirection)
-            dataDictionary['lights'][lamp.name]['radiance'] = [lamp.color.r, lamp.color.g, lamp.color.b]
-            dataDictionary['lights'][lamp.name]['scale'] = lamp.energy
+            dataDictionary['lights'][lampObject.name]['direction'] = flip_space(viewDirection)
+            dataDictionary['lights'][lampObject.name]['radiance'] = [lamp.color.r, lamp.color.g, lamp.color.b]
+            dataDictionary['lights'][lampObject.name]['scale'] = lamp.energy
         elif lamp.type == "SPOT":
-            lightNames.append(lamp.name)
-            if lamp.name not in dataDictionary['lights']:
-                dataDictionary['lights'][lamp.name] = collections.OrderedDict()
+            if lampObject.name not in dataDictionary['lights']:
+                dataDictionary['lights'][lampObject.name] = collections.OrderedDict()
             lightType = "spot"
-            dataDictionary['lights'][lamp.name]['type'] = lightType
-            dataDictionary['lights'][lamp.name]['position'] = flip_space(lampObject.location)
+            dataDictionary['lights'][lampObject.name]['type'] = lightType
+            dataDictionary['lights'][lampObject.name]['position'] = flip_space(lampObject.location)
             lightDirection = lampObject.matrix_world.to_quaternion() * Vector((0.0, 0.0, -1.0))
-            dataDictionary['lights'][lamp.name]['direction'] = flip_space(lightDirection)
-            dataDictionary['lights'][lamp.name]['intensity'] = [lamp.color.r, lamp.color.g, lamp.color.b]
-            dataDictionary['lights'][lamp.name]['scale'] = lamp.energy
-            dataDictionary['lights'][lamp.name]['width'] = lamp.spot_size / 2
+            dataDictionary['lights'][lampObject.name]['direction'] = flip_space(lightDirection)
+            dataDictionary['lights'][lampObject.name]['intensity'] = [lamp.color.r, lamp.color.g, lamp.color.b]
+            dataDictionary['lights'][lampObject.name]['scale'] = lamp.energy
+            dataDictionary['lights'][lampObject.name]['width'] = lamp.spot_size / 2
             # Try to match the inner circle for the falloff (not exact, blender seems buggy):
             # https://blender.stackexchange.com/questions/39555/how-to-calculate-blend-based-on-spot-size-and-inner-cone-angle
-            dataDictionary['lights'][lamp.name]['falloffStart'] = math.atan(math.tan(lamp.spot_size / 2) * math.sqrt(1-lamp.spot_blend))
+            dataDictionary['lights'][lampObject.name]['falloffStart'] = math.atan(math.tan(lamp.spot_size / 2) * math.sqrt(1-lamp.spot_blend))
         else:
-            self.report({'WARNING'}, ("Skipping unsupported lamp type: \"%s\" from: \"%s\"." % (lamp.type, lamp.name)))
+            self.report({'WARNING'}, ("Skipping unsupported lamp type: \"%s\" from: \"%s\"." % (lamp.type, lampObject.name)))
             continue
+        lightNames.append(lampObject.name)
 
     for scene in bpy.data.scenes:
         world = scene.world
