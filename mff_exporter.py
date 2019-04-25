@@ -1,5 +1,6 @@
 import bpy
 import bmesh
+import ctypes
 from mathutils import Vector
 import mathutils
 import os
@@ -164,13 +165,13 @@ def write_vertex_normals(vertexDataArray, mesh, use_compression):
         for k in range(len(mesh.vertices)):
             normal = vertToLoop[k].normal
             if use_compression:
-                vertexDataArray.extend(pack_normal32(normal).to_bytes(4, byteorder='little', signed=True))
+                vertexDataArray.extend(pack_normal32(normal).to_bytes(4, byteorder='little', signed=False))
             else:
                 vertexDataArray.extend(struct.pack('<3f', *normal))
     else:
         for k in range(len(mesh.vertices)):
             if use_compression:
-                vertexDataArray.extend(pack_normal32(mesh.vertices[k].normal).to_bytes(4, byteorder='little', signed=True))
+                vertexDataArray.extend(pack_normal32(mesh.vertices[k].normal).to_bytes(4, byteorder='little', signed=False))
             else:
                 vertexDataArray.extend(struct.pack('<3f', *mesh.vertices[k].normal))
 
@@ -1137,6 +1138,8 @@ def export_mufflon(context, self, filepath, use_selection, use_compression,
 
 def pack_normal32(vec3):
     l1norm = abs(vec3[0]) + abs(vec3[1]) + abs(vec3[2])
+    if l1norm == 0: # Prevent division by zero
+        l1norm = 1e-7
     if vec3[2] >= 0:
         u = vec3[0] / l1norm
         v = vec3[1] / l1norm
@@ -1145,7 +1148,7 @@ def pack_normal32(vec3):
         v = (1 - abs(vec3[0]) / l1norm) * (1 if vec3[1] >= 0 else -1)
     u = math.floor(u * 32767.0 + 0.5)  # from [-1,1] to [-2^15,2^15-1]
     v = math.floor(v * 32767.0 + 0.5)  # from [-1,1] to [-2^15,2^15-1]
-    return u | (v << 16)
+    return ctypes.c_ushort(u).value | ctypes.c_uint(v << 16).value
 
 # ExportHelper is a helper class, defines filename and
 # invoke() function which calls the file selector.
