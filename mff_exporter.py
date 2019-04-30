@@ -59,6 +59,11 @@ def make_path_relative_to_root(blenderPath):
     return finalPath
 
 
+# Overwrite a numeric value within a bytearray
+def write_num(binary, offset, size, num):
+    binary[offset : offset+size] = num.to_bytes(size, byteorder='little')
+
+
 def write_lambert_material(workDictionary, textureMap, material, applyFactor):
     for key in materialKeys: # Delete all material keys which might exist due to a change of the material
         workDictionary.pop(key, None)
@@ -130,7 +135,7 @@ def write_fresnel_material(workDictionary, textureMap, material):
     for key in materialKeys: # Delete all material keys which might exist due to a change of the material
         workDictionary.pop(key, None)
     workDictionary['type'] = "fresnel"
-    workDictionary['refractionIndex'] = material.diffuse_fresnel
+    workDictionary['ior'] = [material.diffuse_fresnel, material.diffuse_fresnel_factor]
     workDictionary['layerRefraction'] = collections.OrderedDict()
     workDictionary['layerReflection'] = collections.OrderedDict()
 
@@ -152,6 +157,31 @@ def write_emissive_material(workDictionary, textureMap, material):
     else:
         workDictionary['radiance'] = [material.diffuse_color.r, material.diffuse_color.g, material.diffuse_color.b]
     workDictionary['scale'] = [material.emit, material.emit, material.emit]
+
+
+
+# If the object has LoDs there are two options:
+# It is a LoD (mesh only) OR an instance of a LoD-chain.
+def is_lod_mesh(obj):
+    # By definition a lod instance may not have any real data (but must be of type mesh).
+    # I.e. it has no geometry == no dimension.
+    return len(obj.lod_levels) != 0 and (obj.dimensions[0] != 0.0 or obj.dimensions[1] != 0.0 or obj.dimensions[2] != 0.0)
+
+# Check, if an object is an exportable instance.
+def is_instance(obj):
+    # Not used by any scene
+    if obj.users == 0:
+        return False
+    # At the moment only meshes and perfect spheres can be exported.
+    # Maybe there is an NURBS or Bezier-spline export in feature...
+    # 'sphere' is a custom property used to flag perfect spheres.
+    # Camera, Lamp, ... are skipped by this if, too.
+    if obj.type != "MESH" and "sphere" not in obj:
+        return False
+    # An object can be 'usual', 'lod_instance' xor 'lod_mesh' where the latter is not an instance.
+    if is_lod_mesh(obj):
+        return False
+    return True
 
 
 
@@ -486,43 +516,6 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
     else:
         objects = [obj for obj in bpy.data.objects if obj.users > 0]
 
-    usedMeshes = []
-    for currentObject in objects:
-        if currentObject.type != "MESH" and "sphere" not in currentObject:  # If mesh or sphere
-            continue
-        if currentObject.data in usedMeshes:
-            continue
-        if len(currentObject.lod_levels) != 0:  # if object has LOD levels
-            if currentObject.type != "MESH" and "sphere" in currentObject:  # skip object with data doesnt work for meshes
-                tempMesh = currentObject.to_mesh(bpy.context.scene, True, calc_tessface=False,
-                                                 settings='RENDER')  # excepts if object has no geometry and is mesh but returns None for none Mesh
-                if tempMesh is not None:
-                    if len(currentObject.data.vertices) != 0:
-                        bpy.data.meshes.remove(tempMesh)
-                        continue
-            elif len(currentObject.data.vertices) != 0:  # if it has data ( objects with LOD have no data, but the LODs are objects too and have data skip them) works only for meshes
-                continue
-        usedMeshes.append(currentObject.data)
-
-    instances = []
-    for currentObject in objects:
-        if currentObject.type != "MESH" and "sphere" not in currentObject:
-            continue
-        if currentObject.type != "MESH" and "sphere" in currentObject:  # doesnt work for meshes
-            tempMesh = currentObject.to_mesh(bpy.context.scene, True, calc_tessface=False,
-                                             settings='RENDER')  # excepts if object has no geometry and is mesh but returns None for none Mesh
-            if tempMesh is None:
-                continue
-            bpy.data.meshes.remove(tempMesh)
-        if len(currentObject.lod_levels) != 0:  # if object has LOD levels
-            if not hasattr(currentObject.data, 'vertices'):
-                continue
-            if len(
-                    currentObject.data.vertices) != 0:  # if it has data ( objects with LOD have no data, but the LODs are objects too and have data skip them)
-                continue
-        if currentObject.data in usedMeshes:
-            instances.append(currentObject.name)
-
     for scene in bpy.data.scenes:
         world = scene.world
         if scene.name not in dataDictionary['scenarios']:
@@ -567,16 +560,12 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
         if 'instanceProperties' not in dataDictionary['scenarios'][scene.name]:
             dataDictionary['scenarios'][scene.name]['instanceProperties'] = collections.OrderedDict()
 
-        sceneObjectNames = []
-
-        for object in scene.objects:
-            sceneObjectNames.append(object.name)
-
-        for instance in instances:
-            if instance not in sceneObjectNames:
-                if instance not in dataDictionary['scenarios'][scene.name]['instanceProperties']:
-                    dataDictionary['scenarios'][scene.name]['instanceProperties'][instance] = collections.OrderedDict()
-                dataDictionary['scenarios'][scene.name]['instanceProperties'][instance]['mask'] = True
+        # Mask instance objects which are not part of this scene (hidden/not part)
+        for obj in objects:
+            if is_instance(obj) and (scene not in obj.users_scene or obj.hide):
+                if obj.name not in dataDictionary['scenarios'][scene.name]['instanceProperties']:
+                    dataDictionary['scenarios'][scene.name]['instanceProperties'][obj.name] = collections.OrderedDict()
+                dataDictionary['scenarios'][scene.name]['instanceProperties'][obj.name]['mask'] = True
 
 
     # CustomJSONEncoder: Custom float formater (default values will be like 0.2799999994039535)
@@ -651,31 +640,16 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
         flags |= 2
     binary.extend(flags.to_bytes(4, byteorder='little'))
 
-    countOfObjects = 0
+    # Get all real geometric objects for export and make them unique (instancing may refer to the same
+    # mesh multiple times).
     if use_selection:
-        objects = [obj for obj in bpy.context.selected_objects if obj.users > 0]
+        instances = [obj for obj in bpy.context.selected_objects if is_instance(obj)]
     else:
-        objects = [obj for obj in bpy.data.objects if obj.users > 0]
+        instances = [obj for obj in bpy.data.objects if is_instance(obj)]
 
-    usedMeshes = []
-    for i in range(len(objects)):
-        currentObject = objects[i]
-        if currentObject.type != "MESH" and "sphere" not in currentObject:  # If mesh or sphere
-            continue
-        if currentObject.data in usedMeshes:
-            continue
-        if len(currentObject.lod_levels) != 0:  # if object has LOD levels
-            if currentObject.type != "MESH" and "sphere" in currentObject:  # skip object with data doesnt work for meshes
-                tempMesh = currentObject.to_mesh(bpy.context.scene, True, calc_tessface=False, settings='RENDER')  # excepts if object has no geometry and is mesh but returns None for none Mesh
-                if tempMesh is not None:
-                    if len(currentObject.data.vertices) != 0:
-                        bpy.data.meshes.remove(tempMesh)
-                        continue
-            elif len(currentObject.data.vertices) != 0:  # if it has data ( objects with LOD have no data, but the LODs are objects too and have data skip them) works only for meshes
-                continue
-        usedMeshes.append(currentObject.data)
-        countOfObjects += 1
-
+    # Get the number of unique data references. While it hurts to perform an entire set construction
+    # there is no much better way. The object count must be known to construct the jump-table properly.
+    countOfObjects = len({obj.data for obj in instances})
     binary.extend(countOfObjects.to_bytes(4, byteorder='little'))
 
     objectStartBinaryPosition = []  # Save Position in binary to set this correct later
@@ -683,29 +657,15 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
         objectStartBinaryPosition.append(len(binary))
         binary.extend((0).to_bytes(8, byteorder='little'))  # has to be corrected when the value is known
 
-    currentObjectNumber = 0
-    usedMeshes = []
     activeObject = scn.objects.active   # Keep this for resetting later
-    for i in range(len(objects)):
-        currentObject = objects[i]
-        if currentObject.type != "MESH" and "sphere" not in currentObject:  # If mesh or sphere
+    exportedObjects = OrderedDict()
+    for currentObject in instances:
+        # Due to instancing a mesh might be referenced multiple times
+        if currentObject.data in exportedObjects:
             continue
-        if currentObject.data in usedMeshes:
-            continue
-        if len(currentObject.lod_levels) != 0:  # if object has LOD levels
-            if currentObject.type != "MESH" and "sphere" in currentObject:  # skip object with data doesnt work for meshes
-                tempMesh = currentObject.to_mesh(bpy.context.scene, True, calc_tessface=False, settings='RENDER')  # excepts if object has no geometry and is mesh but returns None for none Mesh
-                if tempMesh is not None:
-                    if len(currentObject.data.vertices) != 0:
-                        bpy.data.meshes.remove(tempMesh)
-                        continue
-            elif len(currentObject.data.vertices) != 0:  # if it has data ( objects with LOD have no data, but the LODs are objects too and have data skip them) works only for meshes
-                continue
-        usedMeshes.append(currentObject.data)
-        objectStartPosition = len(binary).to_bytes(8, byteorder='little')
-        for j in range(8):
-            binary[objectStartBinaryPosition[currentObjectNumber]+j] = objectStartPosition[j]
-        currentObjectNumber += 1
+        idx = len(exportedObjects)
+        exportedObjects[currentObject.data] = idx # Store index for the instance export
+        write_num(binary, objectStartBinaryPosition[idx], 8, len(binary)) # object start position
         # Type check
         binary.extend("Obj_".encode())
         # Object name
@@ -770,15 +730,12 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
         # Number of entries in table
         binary.extend((len(lodLevels)).to_bytes(4, byteorder='little'))
         lodStartBinaryPosition = len(binary)
-        print(objectName)
         for j in range(len(lodLevels)):
             binary.extend((0).to_bytes(8, byteorder='little'))  # has to be corrected when the value is known
         for j in range(len(lodLevels)):
             lodObject = lodLevels[(lodChainStart+j) % len(lodLevels)]  # for the correct starting object
             # start Positions
-            lodStartPosition = len(binary).to_bytes(8, byteorder='little')
-            for k in range(8):
-                binary[lodStartBinaryPosition + k + j*8] = lodStartPosition[k]
+            write_num(binary, lodStartBinaryPosition + j*8, 8, len(binary))
             # Type
             binary.extend("LOD_".encode())
             # Needs to set the target object to active, to be able to apply changes.
@@ -911,9 +868,7 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
                     numberOfVertexAttributes += 1
 
                 if numberOfVertexAttributes > 0:
-                    numberOfVertexAttributesBin = numberOfVertexAttributes.to_bytes(4, byteorder='little')
-                    for k in range(4):
-                        binary[numberOfVertexAttributesBinaryPosition + k] = numberOfVertexAttributesBin[k]
+                    write_num(binary, numberOfVertexAttributesBinaryPosition, 4, numberOfVertexAttributes)
 
                     binary.extend("Attr".encode())
                     for uvNumber in range(len(mesh.uv_layers)):
@@ -1042,11 +997,8 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
                     if (objectFlags & 1) == 0:
                         if lodObject.active_material.emit > 0.0:
                             objectFlags |= 1
-                            objectFlagsBin = objectFlags.to_bytes(4, byteorder='little')
-                            for k in range(4):
-                                binary[objectFlagsBinaryPosition + k] = objectFlagsBin[k]
+                            write_num(binary, objectFlagsBinaryPosition, 4, objectFlags)
                 else:
-
                     self.report({'WARNING'}, ("LOD Object: \"%s\" has no materials." % (lodObject.name)))
                     sphereDataArray.extend((0).to_bytes(2, byteorder='little'))  # first material is default when the object has no mats
 
@@ -1062,47 +1014,29 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
             lodObject.hide = hidden
     #reset active object
     scn.objects.active = activeObject
+
     # Instances
-    instanceStartPosition = len(binary).to_bytes(8, byteorder='little')
-    for i in range(8):
-        binary[instanceSectionStartBinaryPosition + i] = instanceStartPosition[i]
+    write_num(binary, instanceSectionStartBinaryPosition, 8, len(binary))
     # Type
     binary.extend("Inst".encode())
+
     # Number of Instances
-    numberOfInstancesBinaryPosition = len(binary)
-    binary.extend((0).to_bytes(4, byteorder='little'))  # has to be corrected later
-    numberOfInstances = 0
-    for i in range(len(objects)):
-        currentObject = objects[i]
-        if currentObject.type != "MESH" and "sphere" not in currentObject:
-            continue
-        if currentObject.type != "MESH" and "sphere" in currentObject:  # doesnt work for meshes
-            tempMesh = currentObject.to_mesh(bpy.context.scene, True, calc_tessface=False, settings='RENDER')  # excepts if object has no geometry and is mesh but returns None for none Mesh
-            if tempMesh is None:
-                continue
-            bpy.data.meshes.remove(tempMesh)
-        if len(currentObject.lod_levels) != 0:  # if object has LOD levels
-            if not hasattr(currentObject.data, 'vertices'):
-                continue
-            if len(currentObject.data.vertices) != 0:  # if it has data ( objects with LOD have no data, but the LODs are objects too and have data skip them)
-                continue
-        if currentObject.data in usedMeshes:
-            index = usedMeshes.index(currentObject.data)
-            binary.extend(len(currentObject.name.encode()).to_bytes(4, byteorder='little'))
-            binary.extend(currentObject.name.encode())
-            binary.extend(index.to_bytes(4, byteorder='little'))  # Object ID
-            binary.extend((0xFFFFFFFF).to_bytes(4, byteorder='little'))  # TODO Keyframe
-            binary.extend((0xFFFFFFFF).to_bytes(4, byteorder='little'))  # TODO Instance ID
-            transformMat = currentObject.matrix_world
-            # Apply the flip_space transformation on instance transformation level.
-            binary.extend(struct.pack('<4f', *transformMat[0]))
-            binary.extend(struct.pack('<4f', *transformMat[2]))
-            for k in range(4):
-                binary.extend(struct.pack('<f', -transformMat[1][k]))
-            numberOfInstances += 1
-    numberOfInstancesBytes = numberOfInstances.to_bytes(4, byteorder='little')
-    for i in range(4):
-        binary[numberOfInstancesBinaryPosition + i] = numberOfInstancesBytes[i]
+    numberOfInstances = len(instances)
+    binary.extend(numberOfInstances.to_bytes(4, byteorder='little'))  # has to be corrected later
+    for currentInstance in instances:
+        index = exportedObjects[currentInstance.data]
+        binary.extend(len(currentInstance.name.encode()).to_bytes(4, byteorder='little'))
+        binary.extend(currentInstance.name.encode())
+        binary.extend(index.to_bytes(4, byteorder='little'))  # Object ID
+        binary.extend((0xFFFFFFFF).to_bytes(4, byteorder='little'))  # TODO Keyframe
+        binary.extend((0xFFFFFFFF).to_bytes(4, byteorder='little'))  # TODO Instance ID
+        transformMat = currentInstance.matrix_world
+        # Apply the flip_space transformation on instance transformation level.
+        binary.extend(struct.pack('<4f', *transformMat[0]))
+        binary.extend(struct.pack('<4f', *transformMat[2]))
+        for k in range(4):
+            binary.extend(struct.pack('<f', -transformMat[1][k]))
+
     # Reset scene
     bpy.context.screen.scene = scn
     # Write binary to file
