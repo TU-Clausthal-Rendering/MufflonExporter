@@ -482,18 +482,12 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
 
     # Make a dict with all instances
     if use_selection:
-        tempObjects = bpy.context.selected_objects
+        objects = [obj for obj in bpy.context.selected_objects if obj.users > 0]
     else:
-        tempObjects = bpy.data.objects
-
-    objects = []
-    for obj in tempObjects:
-        if obj.users != 0:
-            objects.append(obj)
+        objects = [obj for obj in bpy.data.objects if obj.users > 0]
 
     usedMeshes = []
-    for i in range(len(objects)):
-        currentObject = objects[i]
+    for currentObject in objects:
         if currentObject.type != "MESH" and "sphere" not in currentObject:  # If mesh or sphere
             continue
         if currentObject.data in usedMeshes:
@@ -506,14 +500,12 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
                     if len(currentObject.data.vertices) != 0:
                         bpy.data.meshes.remove(tempMesh)
                         continue
-            elif len(
-                    currentObject.data.vertices) != 0:  # if it has data ( objects with LOD have no data, but the LODs are objects too and have data skip them) works only for meshes
+            elif len(currentObject.data.vertices) != 0:  # if it has data ( objects with LOD have no data, but the LODs are objects too and have data skip them) works only for meshes
                 continue
         usedMeshes.append(currentObject.data)
 
     instances = []
-    for i in range(len(objects)):
-        currentObject = objects[i]
+    for currentObject in objects:
         if currentObject.type != "MESH" and "sphere" not in currentObject:
             continue
         if currentObject.type != "MESH" and "sphere" in currentObject:  # doesnt work for meshes
@@ -568,8 +560,8 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
             dataDictionary['scenarios'][scene.name]['materialAssignments'][material] = material
 
         # Object properties
-        if 'objectProperties' not in dataDictionary['scenarios'][scene.name]:
-            dataDictionary['scenarios'][scene.name]['objectProperties'] = collections.OrderedDict()
+        #if 'objectProperties' not in dataDictionary['scenarios'][scene.name]:
+        #    dataDictionary['scenarios'][scene.name]['objectProperties'] = collections.OrderedDict()
 
         # Instance properties
         if 'instanceProperties' not in dataDictionary['scenarios'][scene.name]:
@@ -793,6 +785,8 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
             if len(lodObject.users_scene) < 1:
                 continue
             bpy.context.screen.scene = lodObject.users_scene[0] # Choose a valid scene which contains the object
+            hidden = lodObject.hide
+            lodObject.hide = False
             bpy.context.scene.objects.active = lodObject
             mode = lodObject.mode
             bpy.ops.object.mode_set(mode='EDIT')
@@ -1065,6 +1059,7 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
                 binary.extend(sphereOutData)
             # reset used mode
             bpy.ops.object.mode_set(mode=mode)
+            lodObject.hide = hidden
     #reset active object
     scn.objects.active = activeObject
     # Instances
