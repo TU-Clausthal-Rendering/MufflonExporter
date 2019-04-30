@@ -58,6 +58,11 @@ def make_path_relative_to_root(blenderPath):
     finalPath = finalPath.replace("\\", "/")
     return finalPath
 
+# Takes an array of anything and returns either the array or an array containing one element if they're all the same
+def junction_path(path):
+    if path[1:] == path[:-1]:
+        return [path[0]]
+    return path
 
 # Overwrite a numeric value within a bytearray
 def write_num(binary, offset, size, num):
@@ -206,7 +211,8 @@ def write_vertex_normals(vertexDataArray, mesh, use_compression):
                 vertexDataArray.extend(struct.pack('<3f', *mesh.vertices[k].normal))
 
 
-def export_json(context, self, filepath, binfilepath, use_selection, overwrite_default_scenario):
+def export_json(context, self, filepath, binfilepath, use_selection, overwrite_default_scenario,
+                export_animation):
     version = "1.1"
     binary = os.path.relpath(binfilepath, os.path.commonpath([filepath, binfilepath]))
     global rootFilePath; rootFilePath = os.path.dirname(filepath)
@@ -242,8 +248,12 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
         dataDictionary['lights'] = collections.OrderedDict()
         dataDictionary['materials'] = collections.OrderedDict()
         dataDictionary['scenarios'] = collections.OrderedDict()
+    
+    # Store current frame to reset it later
+    frame_current = scn.frame_current
+    frame_range = range(scn.frame_start, scn.frame_end + 1) if export_animation else [frame_current]
+    
     # Cameras
-
     cameras = [o for o in bpy.data.objects if o.type == 'CAMERA']
 
     for i in range(len(cameras)):
@@ -283,26 +293,15 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
         cameraPath = []
         viewDirectionPath = []
         upPath = []
-        if camera.animation_data:  # TODO Check if this works
-            frameinfo = getframeinfo(currentframe())
-            self.report({'WARNING'},
-                        "Using not tested code for animated camera: line %d." % frameinfo.lineno)
-            x_curve = camera.animation_data.action.fcurves.find('location', index=0)
-            y_curve = camera.animation_data.action.fcurves.find('location', index=1)
-            z_curve = camera.animation_data.action.fcurves.find('location', index=2)
-            for f in range(scn.frame_start, scn.frame_end):
-                pos = (x_curve.evaluate(f), y_curve.evaluate(f), z_curve.evaluate(f))
-                cameraPath.append(flip_space(pos))
-        else:  # for not animated Cameras
+        for f in frame_range:
+            scn.frame_set(f)
             trans, rot, scale = cameraObject.matrix_world.decompose()
             cameraPath.append(flip_space(cameraObject.location))
-            viewDirection = rot * Vector((0.0, 0.0, -1.0))
-            viewDirectionPath.append(flip_space(viewDirection))
-            up = rot * Vector((0.0, 1.0, 0.0))
-            upPath.append(flip_space(up))
-        dataDictionary['cameras'][cameraObject.name]['path'] = cameraPath
-        dataDictionary['cameras'][cameraObject.name]['viewDir'] = viewDirectionPath
-        dataDictionary['cameras'][cameraObject.name]['up'] = upPath
+            viewDirectionPath.append(flip_space(rot * Vector((0.0, 0.0, -1.0))))
+            upPath.append(flip_space(rot * Vector((0.0, 1.0, 0.0))))
+        dataDictionary['cameras'][cameraObject.name]['path'] = junction_path(cameraPath)
+        dataDictionary['cameras'][cameraObject.name]['viewDir'] = junction_path(viewDirectionPath)
+        dataDictionary['cameras'][cameraObject.name]['up'] = junction_path(upPath)
 
     if len(dataDictionary['cameras']) == 0:
         self.report({'ERROR'}, "No camera found.")  # Stop if no camera was exported
@@ -328,45 +327,80 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
                     if lampTextureSlot.texture.image is None:
                         self.report({'WARNING'}, ("Skipping goniometric lamp: \"%s\" because Texture: \"%s\" has no image." % (lampObject.name, lampTextureSlot.texture.name)))
                     else:
-                        lightType = "goniometric"
-                        dataDictionary['lights'][lampObject.name]['type'] = lightType
-                        dataDictionary['lights'][lampObject.name]['position'] = flip_space(lampObject.location)
+                        positions = []
+                        scales = []
+                        # Go through all frames, accumulate the to-be-exported quantities
+                        for f in frame_range:
+                            scn.frame_set(f)
+                            positions.append(flip_space(lampObject.location))
+                            scales.append(lamp.energy)
+                        dataDictionary['lights'][lampObject.name]['type'] = "goniometric"
+                        dataDictionary['lights'][lampObject.name]['position'] = junction_path(positions)
                         finalPath = make_path_relative_to_root(lampTextureSlot.texture.image.filepath)
                         dataDictionary['lights'][lampObject.name]['map'] = finalPath
-                        dataDictionary['lights'][lampObject.name]['scale'] = lamp.energy
+                        dataDictionary['lights'][lampObject.name]['scale'] = junction_path(scales)
             else:
-                lightType = "point"
-                dataDictionary['lights'][lampObject.name]['type'] = lightType
-                dataDictionary['lights'][lampObject.name]['position'] = flip_space(lampObject.location)
-                dataDictionary['lights'][lampObject.name]['intensity'] = [lamp.color.r, lamp.color.g, lamp.color.b]
-                dataDictionary['lights'][lampObject.name]['scale'] = lamp.energy
+                positions = []
+                intensities = []
+                scales = []
+                # Go through all frames, accumulate the to-be-exported quantities
+                for f in frame_range:
+                    scn.frame_set(f)
+                    positions.append(flip_space(lampObject.location))
+                    intensities.append([lamp.color.r, lamp.color.g, lamp.color.b])
+                    scales.append(lamp.energy)
+                dataDictionary['lights'][lampObject.name]['type'] = "point"
+                dataDictionary['lights'][lampObject.name]['position'] = junction_path(positions)
+                dataDictionary['lights'][lampObject.name]['intensity'] = junction_path(intensities)
+                dataDictionary['lights'][lampObject.name]['scale'] = junction_path(scales)
         elif lamp.type == "SUN":
             if lampObject.name not in dataDictionary['lights']:
                 dataDictionary['lights'][lampObject.name] = collections.OrderedDict()
-            lightType = "directional"
-            dataDictionary['lights'][lampObject.name]['type'] = lightType
-            viewDirection = lampObject.matrix_world.to_quaternion() * Vector((0.0, 0.0, -1.0))
-            dataDictionary['lights'][lampObject.name]['direction'] = flip_space(viewDirection)
-            dataDictionary['lights'][lampObject.name]['radiance'] = [lamp.color.r, lamp.color.g, lamp.color.b]
-            dataDictionary['lights'][lampObject.name]['scale'] = lamp.energy
+            directions = []
+            radiances = []
+            scales = []
+            # Go through all frames, accumulate the to-be-exported quantities
+            for f in frame_range:
+                scn.frame_set(f)
+                directions.append(flip_space(lampObject.matrix_world.to_quaternion() * Vector((0.0, 0.0, -1.0))))
+                radiances.append([lamp.color.r, lamp.color.g, lamp.color.b])
+                scales.append(lamp.energy)
+            dataDictionary['lights'][lampObject.name]['type'] = "directional"
+            dataDictionary['lights'][lampObject.name]['direction'] = junction_path(directions)
+            dataDictionary['lights'][lampObject.name]['radiance'] = junction_path(radiances)
+            dataDictionary['lights'][lampObject.name]['scale'] = junction_path(scales)
         elif lamp.type == "SPOT":
             if lampObject.name not in dataDictionary['lights']:
                 dataDictionary['lights'][lampObject.name] = collections.OrderedDict()
-            lightType = "spot"
-            dataDictionary['lights'][lampObject.name]['type'] = lightType
-            dataDictionary['lights'][lampObject.name]['position'] = flip_space(lampObject.location)
-            lightDirection = lampObject.matrix_world.to_quaternion() * Vector((0.0, 0.0, -1.0))
-            dataDictionary['lights'][lampObject.name]['direction'] = flip_space(lightDirection)
-            dataDictionary['lights'][lampObject.name]['intensity'] = [lamp.color.r, lamp.color.g, lamp.color.b]
-            dataDictionary['lights'][lampObject.name]['scale'] = lamp.energy
-            dataDictionary['lights'][lampObject.name]['width'] = lamp.spot_size / 2
-            # Try to match the inner circle for the falloff (not exact, blender seems buggy):
-            # https://blender.stackexchange.com/questions/39555/how-to-calculate-blend-based-on-spot-size-and-inner-cone-angle
-            dataDictionary['lights'][lampObject.name]['falloffStart'] = math.atan(math.tan(lamp.spot_size / 2) * math.sqrt(1-lamp.spot_blend))
+            positions = []
+            directions = []
+            intensities = []
+            scales = []
+            widths = []
+            falloffs = []
+            # Go through all frames, accumulate the to-be-exported quantities
+            for f in frame_range:
+                scn.frame_set(f)
+                positions.append(flip_space(lampObject.location))
+                directions.append(flip_space(lampObject.matrix_world.to_quaternion() * Vector((0.0, 0.0, -1.0))))
+                intensities.append([lamp.color.r, lamp.color.g, lamp.color.b])
+                scales.append(lamp.energy)
+                widths.append(lamp.spot_size / 2)
+                # Try to match the inner circle for the falloff (not exact, blender seems buggy):
+                # https://blender.stackexchange.com/questions/39555/how-to-calculate-blend-based-on-spot-size-and-inner-cone-angle
+                falloffs.append(math.atan(math.tan(lamp.spot_size / 2) * math.sqrt(1-lamp.spot_blend)))
+            dataDictionary['lights'][lampObject.name]['type'] = "spot"
+            dataDictionary['lights'][lampObject.name]['position'] = junction_path(positions)
+            dataDictionary['lights'][lampObject.name]['direction'] = junction_path(directions)
+            dataDictionary['lights'][lampObject.name]['intensity'] = junction_path(intensities)
+            dataDictionary['lights'][lampObject.name]['scale'] = junction_path(scales)
+            dataDictionary['lights'][lampObject.name]['width'] = junction_path(widths)
+            dataDictionary['lights'][lampObject.name]['falloffStart'] = junction_path(falloffs)
         else:
             self.report({'WARNING'}, ("Skipping unsupported lamp type: \"%s\" from: \"%s\"." % (lamp.type, lampObject.name)))
             continue
         lightNames.append(lampObject.name)
+    scn.frame_set(frame_current)
 
     for scene in bpy.data.scenes:
         world = scene.world
@@ -584,8 +618,13 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
 #   #  #  #  #  ##  #######  #  #    #
 #   ###   #  #   #  #     #  #  #    #
 
-def export_binary(context, self, filepath, use_selection, use_deflation, use_compression, triangulate):
+def export_binary(context, self, filepath, use_selection, use_deflation, use_compression,
+                  triangulate, export_animation):
     scn = context.scene
+    # Store current frame to reset it later
+    frame_current = scn.frame_current
+    frame_range = range(scn.frame_start, scn.frame_end + 1) if export_animation else [frame_current]
+    
     # Binary
     binary = bytearray()
     # Materials Header
@@ -646,10 +685,43 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
         instances = [obj for obj in bpy.context.selected_objects if is_instance(obj)]
     else:
         instances = [obj for obj in bpy.data.objects if is_instance(obj)]
+    
+    animationObjects = []
+    if export_animation:
+        print("Checking for animated meshes...")
+        # List of instances to remove because they're animated
+        remainingInstances = []
+        # To export deforming animations (such as fluid animations), we check if one of the modifiers for them is present
+        for idx in range(0, len(instances)):
+            instance = instances[idx]
+            if instance.type == "MESH":
+                fluidMods = [mod for mod in instance.modifiers if mod.type == "FLUID_SIMULATION"]
+                if not fluidMods:
+                    remainingInstances.append(instance)
+                    continue
+                # Check if we're the fluid, in which case we simply don't export the object
+                if fluidMods[0].settings.type == "DOMAIN":
+                    print("Converting '", instance.name, "' to per-frame mesh")
+                    # Now for each frame, add an object with applied modifiers
+                    for f in frame_range:
+                        scn.frame_set(f)
+                        mesh = instance.to_mesh(scn, True, calc_tessface=False, settings='RENDER')  # applies all modifiers
+                        # Fluid objects should have smooth surfaces -> smooth normals
+                        for p in mesh.polygons:
+                            p.use_smooth = True
+                        obj = bpy.data.objects.new(instance.name + "_frame_" + str(f), mesh)
+                        obj.matrix_world = instance.matrix_world
+                        scn.objects.link(obj)
+                        obj.select = True
+                        animationObjects.append(obj)
+                elif fluidMods[0].settings.type != "FLUID":
+                    remainingInstances.append(instance)
+        instances = remainingInstances
+                    
 
     # Get the number of unique data references. While it hurts to perform an entire set construction
     # there is no much better way. The object count must be known to construct the jump-table properly.
-    countOfObjects = len({obj.data for obj in instances})
+    countOfObjects = len({obj.data for obj in instances}) + len(animationObjects)
     binary.extend(countOfObjects.to_bytes(4, byteorder='little'))
 
     objectStartBinaryPosition = []  # Save Position in binary to set this correct later
@@ -657,12 +729,16 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
         objectStartBinaryPosition.append(len(binary))
         binary.extend((0).to_bytes(8, byteorder='little'))  # has to be corrected when the value is known
 
+    print("Exporting objects...")
     activeObject = scn.objects.active   # Keep this for resetting later
     exportedObjects = OrderedDict()
-    for currentObject in instances:
+    for objIdx in range(0, len(instances) + len(animationObjects)):
+        isAnimatedObject = objIdx >= len(instances)
+        currentObject = animationObjects[objIdx - len(instances)] if isAnimatedObject else instances[objIdx]
         # Due to instancing a mesh might be referenced multiple times
         if currentObject.data in exportedObjects:
             continue
+        print(currentObject.name)
         idx = len(exportedObjects)
         exportedObjects[currentObject.data] = idx # Store index for the instance export
         write_num(binary, objectStartBinaryPosition[idx], 8, len(binary)) # object start position
@@ -677,8 +753,9 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
         objectFlagsBinaryPosition = len(binary)
         objectFlags = 0
         binary.extend(objectFlags.to_bytes(4, byteorder='little'))
-        # keyframe
-        binary.extend((0xFFFFFFFF).to_bytes(4, byteorder='little'))  # TODO keyframes
+        # keyframe (computed from the animated object index)
+        keyframe = (frame_range[0] + ((objIdx - len(instances)) % len(frame_range))) if isAnimatedObject else 0xFFFFFFFF
+        binary.extend(keyframe.to_bytes(4, byteorder='little'))  # TODO keyframes
         # OBJID of previous object in animation
         binary.extend((0xFFFFFFFF).to_bytes(4, byteorder='little'))  # TODO keyframes
         # Bounding box
@@ -1020,22 +1097,63 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
     # Type
     binary.extend("Inst".encode())
 
+    print("Exporting instances...")
     # Number of Instances
-    numberOfInstances = len(instances)
-    binary.extend(numberOfInstances.to_bytes(4, byteorder='little'))  # has to be corrected later
+    numberOfInstancesBinaryPosition = len(binary)
+    binary.extend((0).to_bytes(4, byteorder='little'))  # has to be corrected later
+    numberOfInstances = 0
     for currentInstance in instances:
         index = exportedObjects[currentInstance.data]
-        binary.extend(len(currentInstance.name.encode()).to_bytes(4, byteorder='little'))
-        binary.extend(currentInstance.name.encode())
+        transMats = []
+        instanceAnimated = False
+        for f in frame_range:
+            scn.frame_set(f)
+            if not instanceAnimated and len(transMats) > 0 and transMats[0] != currentInstance.matrix_world:
+                instanceAnimated = True
+            transMats.append(currentInstance.matrix_world.copy())
+        scn.frame_set(frame_current)
+        if not instanceAnimated:
+            transMats = [transMats[0]]
+        for f in range(0, len(transMats)):
+            binary.extend(len(currentInstance.name.encode()).to_bytes(4, byteorder='little'))
+            binary.extend(currentInstance.name.encode())
+            binary.extend(index.to_bytes(4, byteorder='little'))  # Object ID
+            keyframe = (frame_range[0] + f) if instanceAnimated else 0xFFFFFFFF
+            binary.extend(keyframe.to_bytes(4, byteorder='little')) # Keyframe
+            binary.extend((0xFFFFFFFF).to_bytes(4, byteorder='little'))  # TODO Instance ID
+            transformMat = transMats[f]
+            # Apply the flip_space transformation on instance transformation level.
+            binary.extend(struct.pack('<4f', *transformMat[0]))
+            binary.extend(struct.pack('<4f', *transformMat[2]))
+            for k in range(4):
+                binary.extend(struct.pack('<f', -transformMat[1][k]))
+            numberOfInstances += 1
+    # Export animated object-instances separately as they don't need per-frame treatment
+    for instanceIdx in range(0, len(animationObjects)):
+        animatedInstance = animationObjects[instanceIdx]
+        index = exportedObjects[animatedInstance.data]
+        binary.extend(len(animatedInstance.name.encode()).to_bytes(4, byteorder='little'))
+        binary.extend(animatedInstance.name.encode())
         binary.extend(index.to_bytes(4, byteorder='little'))  # Object ID
-        binary.extend((0xFFFFFFFF).to_bytes(4, byteorder='little'))  # TODO Keyframe
+        keyframe = frame_range[0] + (instanceIdx % len(frame_range))
+        binary.extend(keyframe.to_bytes(4, byteorder='little')) # Keyframe
         binary.extend((0xFFFFFFFF).to_bytes(4, byteorder='little'))  # TODO Instance ID
-        transformMat = currentInstance.matrix_world
+        transformMat = animatedInstance.matrix_world
         # Apply the flip_space transformation on instance transformation level.
         binary.extend(struct.pack('<4f', *transformMat[0]))
         binary.extend(struct.pack('<4f', *transformMat[2]))
         for k in range(4):
             binary.extend(struct.pack('<f', -transformMat[1][k]))
+        numberOfInstances += 1
+        # Remove the animated object
+        bpy.ops.object.select_all(action='DESELECT')
+        animatedInstance.select = True
+        bpy.ops.object.delete()
+        
+    # Now that we're done we know the amount of instances
+    numberOfInstancesBytes = numberOfInstances.to_bytes(4, byteorder='little')
+    for i in range(4):
+        binary[numberOfInstancesBinaryPosition + i] = numberOfInstancesBytes[i]
 
     # Reset scene
     bpy.context.screen.scene = scn
@@ -1047,13 +1165,16 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
 
 
 def export_mufflon(context, self, filepath, use_selection, use_compression,
-                   use_deflation, overwrite_default_scenario, triangulate):
+                   use_deflation, overwrite_default_scenario, triangulate,
+                   export_animation):
     filename = os.path.splitext(filepath)[0]
     binfilepath = filename + ".mff"
-    if export_json(context, self, filepath, binfilepath, use_selection, overwrite_default_scenario) == 0:
+    if export_json(context, self, filepath, binfilepath, use_selection,
+                   overwrite_default_scenario, export_animation) == 0:
         print("Succeeded exporting JSON")
         if export_binary(context, self, binfilepath, use_selection,
-                         use_compression, use_deflation, triangulate) == 0:
+                         use_compression, use_deflation, triangulate,
+                         export_animation) == 0:
             print("Succeeded exporting binary")
         else:
             print("Failed exporting binary")
@@ -1126,12 +1247,18 @@ class MufflonExporter(Operator, ExportHelper):
             description="Overwrite the default scenario when exporting JSON if already set",
             default=True,
             )
+    export_animation = BoolProperty(
+            name="Export animation",
+            description="Exports instance transformations per animation frame",
+            default=False,
+            )
     path_mode = path_reference_mode
 
     def execute(self, context):
         return export_mufflon(context, self, self.filepath, self.use_selection,
                               self.use_deflation, self.use_compression,
-                              self.overwrite_default_scenario, self.triangulate)
+                              self.overwrite_default_scenario, self.triangulate,
+                              self.export_animation)
 
 
 # Only needed if you want to add into a dynamic menu
