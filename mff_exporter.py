@@ -210,6 +210,22 @@ def write_vertex_normals(vertexDataArray, mesh, use_compression):
             else:
                 vertexDataArray.extend(struct.pack('<3f', *mesh.vertices[k].normal))
 
+# Creates and appends an object after applying all modifiers for each frame in range
+def create_per_frame_object(scn, instance, animationObjects, frame_range, nameSnippet, smoothNormals=True):
+    print("Converting '", instance.name, "' to per-frame mesh")
+    # Now for each frame, add an object with applied modifiers
+    for f in frame_range:
+        scn.frame_set(f)
+        mesh = instance.to_mesh(scn, True, calc_tessface=False, settings='RENDER')  # applies all modifiers
+        # Animated objects (fluids, cloth) should have smooth surfaces -> smooth normals
+        if smoothNormals:
+            for p in mesh.polygons:
+                p.use_smooth = True
+        obj = bpy.data.objects.new(instance.name + nameSnippet + str(f), mesh)
+        obj.matrix_world = instance.matrix_world
+        scn.objects.link(obj)
+        obj.select = True
+        animationObjects.append(obj)
 
 def export_json(context, self, filepath, binfilepath, use_selection, overwrite_default_scenario,
                 export_animation):
@@ -696,26 +712,18 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
             instance = instances[idx]
             if instance.type == "MESH":
                 fluidMods = [mod for mod in instance.modifiers if mod.type == "FLUID_SIMULATION"]
-                if not fluidMods:
+                clothMods = [mod for mod in instance.modifiers if mod.type == "CLOTH"]
+                if fluidMods:
+                    # Check if we're the fluid, in which case we simply don't export the object
+                    if fluidMods[0].settings.type == "DOMAIN":
+                        create_per_frame_object(scn, instance, animationObjects, frame_range, "_fluidsim_frame_", True)
+                    elif fluidMods[0].settings.type != "FLUID":
+                        remainingInstances.append(instance)
+                elif clothMods:
+                    create_per_frame_object(scn, instance, animationObjects, frame_range, "_clothsim_frame_", True)
+                else:
                     remainingInstances.append(instance)
-                    continue
-                # Check if we're the fluid, in which case we simply don't export the object
-                if fluidMods[0].settings.type == "DOMAIN":
-                    print("Converting '", instance.name, "' to per-frame mesh")
-                    # Now for each frame, add an object with applied modifiers
-                    for f in frame_range:
-                        scn.frame_set(f)
-                        mesh = instance.to_mesh(scn, True, calc_tessface=False, settings='RENDER')  # applies all modifiers
-                        # Fluid objects should have smooth surfaces -> smooth normals
-                        for p in mesh.polygons:
-                            p.use_smooth = True
-                        obj = bpy.data.objects.new(instance.name + "_frame_" + str(f), mesh)
-                        obj.matrix_world = instance.matrix_world
-                        scn.objects.link(obj)
-                        obj.select = True
-                        animationObjects.append(obj)
-                elif fluidMods[0].settings.type != "FLUID":
-                    remainingInstances.append(instance)
+                
         instances = remainingInstances
                     
 
@@ -738,7 +746,11 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
         # Due to instancing a mesh might be referenced multiple times
         if currentObject.data in exportedObjects:
             continue
-        print(currentObject.name)
+        keyframe = (frame_range[0] + ((objIdx - len(instances)) % len(frame_range))) if isAnimatedObject else 0xFFFFFFFF
+        if isAnimatedObject and keyframe == frame_range[0]:
+            print(currentObject.name, " (animated, ", len(frame_range), " frames)")
+        elif not isAnimatedObject:
+            print(currentObject.name)
         idx = len(exportedObjects)
         exportedObjects[currentObject.data] = idx # Store index for the instance export
         write_num(binary, objectStartBinaryPosition[idx], 8, len(binary)) # object start position
@@ -754,7 +766,6 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
         objectFlags = 0
         binary.extend(objectFlags.to_bytes(4, byteorder='little'))
         # keyframe (computed from the animated object index)
-        keyframe = (frame_range[0] + ((objIdx - len(instances)) % len(frame_range))) if isAnimatedObject else 0xFFFFFFFF
         binary.extend(keyframe.to_bytes(4, byteorder='little'))  # TODO keyframes
         # OBJID of previous object in animation
         binary.extend((0xFFFFFFFF).to_bytes(4, byteorder='little'))  # TODO keyframes
@@ -1097,11 +1108,34 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
     # Type
     binary.extend("Inst".encode())
 
-    print("Exporting instances...")
     # Number of Instances
     numberOfInstancesBinaryPosition = len(binary)
     binary.extend((0).to_bytes(4, byteorder='little'))  # has to be corrected later
     numberOfInstances = 0
+    print("Exporting animated instances...")
+    # Export animated object-instances separately as they don't need per-frame treatment
+    for instanceIdx in range(0, len(animationObjects)):
+        animatedInstance = animationObjects[instanceIdx]
+        index = exportedObjects[animatedInstance.data]
+        binary.extend(len(animatedInstance.name.encode()).to_bytes(4, byteorder='little'))
+        binary.extend(animatedInstance.name.encode())
+        binary.extend(index.to_bytes(4, byteorder='little'))  # Object ID
+        keyframe = frame_range[0] + (instanceIdx % len(frame_range))
+        binary.extend(keyframe.to_bytes(4, byteorder='little')) # Keyframe
+        binary.extend((0xFFFFFFFF).to_bytes(4, byteorder='little'))  # TODO Instance ID
+        transformMat = animatedInstance.matrix_world
+        # Apply the flip_space transformation on instance transformation level.
+        binary.extend(struct.pack('<4f', *transformMat[0]))
+        binary.extend(struct.pack('<4f', *transformMat[2]))
+        for k in range(4):
+            binary.extend(struct.pack('<f', -transformMat[1][k]))
+        numberOfInstances += 1
+        # Remove the animated object
+        bpy.ops.object.select_all(action='DESELECT')
+        animatedInstance.select = True
+        bpy.ops.object.delete()
+		
+    print("Exporting regular instances...")
     for currentInstance in instances:
         index = exportedObjects[currentInstance.data]
         transMats = []
@@ -1128,27 +1162,6 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
             for k in range(4):
                 binary.extend(struct.pack('<f', -transformMat[1][k]))
             numberOfInstances += 1
-    # Export animated object-instances separately as they don't need per-frame treatment
-    for instanceIdx in range(0, len(animationObjects)):
-        animatedInstance = animationObjects[instanceIdx]
-        index = exportedObjects[animatedInstance.data]
-        binary.extend(len(animatedInstance.name.encode()).to_bytes(4, byteorder='little'))
-        binary.extend(animatedInstance.name.encode())
-        binary.extend(index.to_bytes(4, byteorder='little'))  # Object ID
-        keyframe = frame_range[0] + (instanceIdx % len(frame_range))
-        binary.extend(keyframe.to_bytes(4, byteorder='little')) # Keyframe
-        binary.extend((0xFFFFFFFF).to_bytes(4, byteorder='little'))  # TODO Instance ID
-        transformMat = animatedInstance.matrix_world
-        # Apply the flip_space transformation on instance transformation level.
-        binary.extend(struct.pack('<4f', *transformMat[0]))
-        binary.extend(struct.pack('<4f', *transformMat[2]))
-        for k in range(4):
-            binary.extend(struct.pack('<f', -transformMat[1][k]))
-        numberOfInstances += 1
-        # Remove the animated object
-        bpy.ops.object.select_all(action='DESELECT')
-        animatedInstance.select = True
-        bpy.ops.object.delete()
         
     # Now that we're done we know the amount of instances
     numberOfInstancesBytes = numberOfInstances.to_bytes(4, byteorder='little')
