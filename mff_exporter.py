@@ -498,6 +498,11 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
                     self.report({'WARNING'}, ("Too many roughness textures: \"%s\",\"%s\" from material: \"%s\"." % (material.texture_slots[textureMap['roughness']].name, textureSlot.name, material.name)))
                 else:
                     textureMap['roughness'] = j
+            if textureSlot.use_map_alpha:
+                if 'alpha' in textureMap:
+                    self.report({'WARNING'}, ("Too many alpha textures: \"%s\",\"%s\" from material: \"%s\"." % (material.texture_slots[textureMap['alpha']].name, textureSlot.name, material.name)))
+                else:
+                    textureMap['alpha'] = j
 
         # Check for Multi-Layer material
         hasRefraction = material.use_transparency and (material.alpha < 1)
@@ -508,6 +513,10 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
         hasEmission = material.emit > 0
         useFresnel = (material.diffuse_shader == "FRESNEL") or (material.raytrace_transparency.fresnel > 0)  # TODO: more options to enable fresnel?
         applyDiffuseScale = True  # Conditional replaced later if intensity is used as a blend factor
+        
+        # Alpha textures are forbidden for area lights
+        if not hasEmission and 'alpha' in textureMap:
+            workDictionary['alpha'] = make_path_relative_to_root(material.texture_slots[textureMap['alpha']].texture.image.filepath)
 
         # Check which combination is given and export the appropriate material
         if hasEmission: 
@@ -557,6 +566,7 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
             if not (material.diffuse_shader == "LAMBERT" or material.diffuse_shader == "FRESNEL"):
                 self.report({'WARNING'}, ("Unsupported diffuse material: \"%s\". Exporting as Lambert material." % (material.name)))
             write_lambert_material(workDictionary, textureMap, material, applyDiffuseScale)
+            
 
     # Scenarios
 
@@ -1134,7 +1144,7 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
         bpy.ops.object.select_all(action='DESELECT')
         animatedInstance.select = True
         bpy.ops.object.delete()
-		
+        
     print("Exporting regular instances...")
     for currentInstance in instances:
         index = exportedObjects[currentInstance.data]
