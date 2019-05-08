@@ -127,7 +127,7 @@ def write_walter_material(workDictionary, textureMap, material):
     if 'roughness' in textureMap:
         workDictionary['roughness'] = make_path_relative_to_root(material.texture_slots[textureMap['roughness']].texture.image.filepath)
     else:
-        workDictionary['roughness'] = (1 - material.raytrace_transparency.gloss_factor)
+        workDictionary['roughness'] = math.pow(1 - material.specular_hardness / 511, 3)  # Max hardness = 511
     if "ndf" in material:
         workDictionary['ndf'] = material["ndf"]
     else:
@@ -284,9 +284,13 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
             if aperture == 128.0:
                 cameraType = "pinhole"
                 dataDictionary['cameras'][cameraObject.name]['type'] = cameraType
-                fov = camera.angle * 180 / 3.141592653589793  # convert rad to degree
-                fov = fov * scn.render.resolution_y / scn.render.resolution_x # correct aspect ratio
-                dataDictionary['cameras'][cameraObject.name]['fov'] = fov
+                # FOV might be horizontal or vertically, see https://blender.stackexchange.com/a/38571
+                if scn.render.resolution_y > scn.render.resolution_x:
+                    fov = camera.angle
+                else:
+                    # correct aspect ratio because camera.angle is defined in x direction
+                    fov = math.atan(math.tan(camera.angle / 2) * scn.render.resolution_y / scn.render.resolution_x) * 2
+                dataDictionary['cameras'][cameraObject.name]['fov'] = fov * 180 / 3.141592653589793  # convert rad to degree
             else:
                 cameraType = "focus"
                 dataDictionary['cameras'][cameraObject.name]['type'] = cameraType
@@ -438,20 +442,21 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
                             dataDictionary['lights'][worldTextureSlot.texture.name]["map"] = finalPath
                             dataDictionary['lights'][worldTextureSlot.texture.name]["scale"] = worldTextureSlot.horizon_factor
 
+    # Make a dict with all instances, cameras, ...
+    if use_selection:
+        objects = [obj for obj in bpy.context.selected_objects if obj.users > 0]
+    else:
+        objects = [obj for obj in bpy.data.objects if obj.users > 0]
 
     # Materials
-
-    # Create dict with used material names
     objects = bpy.data.objects
-    materialNames = dict()
+    materialNames = set() # Names of used materials
 
     for obj in objects:
-        if obj.users != 0:
-            if obj.type == "MESH" or "sphere" in obj:
-                if obj.material_slots is not None:
-                    for materialSlot in obj.material_slots:
-                        if materialSlot.material is not None:
-                            materialNames[materialSlot.material.name] = True
+        if (obj.type == "MESH" or "sphere" in obj) and (obj.material_slots is not None):
+            for materialSlot in obj.material_slots:
+                if materialSlot.material is not None:
+                    materialNames.add(materialSlot.material.name)
 
     materials = bpy.data.materials
     for i in range(len(materials)):
@@ -569,13 +574,6 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
             
 
     # Scenarios
-
-    # Make a dict with all instances
-    if use_selection:
-        objects = [obj for obj in bpy.context.selected_objects if obj.users > 0]
-    else:
-        objects = [obj for obj in bpy.data.objects if obj.users > 0]
-
     for scene in bpy.data.scenes:
         world = scene.world
         if scene.name not in dataDictionary['scenarios']:
@@ -607,9 +605,10 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
         dataDictionary['scenarios'][scene.name]['lights'] = sceneLightNames
         dataDictionary['scenarios'][scene.name]['lod'] = 0
         # Material assignments
-        if 'materialAssignments' not in dataDictionary['scenarios'][scene.name]:
-            dataDictionary['scenarios'][scene.name]['materialAssignments'] = collections.OrderedDict()
-        for material in dataDictionary['materials']:
+        # Always clear the assignments. If something is renamed it does not make sense to keep it.
+        # The number/name of the binary materials is only the set which is exported.
+        dataDictionary['scenarios'][scene.name]['materialAssignments'] = collections.OrderedDict()
+        for material in materialNames:
             dataDictionary['scenarios'][scene.name]['materialAssignments'][material] = material
 
         # Object properties
