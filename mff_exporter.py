@@ -48,7 +48,7 @@ class CustomJSONEncoder(json.JSONEncoder):
 def flip_space(vec):
     return [vec[0], vec[2], -vec[1]]
 
-materialKeys = ["type", "albedo", "roughness", "ndf", "absorption", "radiance", "scale", "refractionIndex", "factorA", "factorB", "layerA", "layerB", "layerReflection", "layerRefraction"]
+materialKeys = ["alpha", "type", "albedo", "roughness", "ndf", "absorption", "radiance", "scale", "refractionIndex", "factorA", "factorB", "layerA", "layerB", "layerReflection", "layerRefraction"]
 rootFilePath = ""
 
 
@@ -519,9 +519,8 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
         useFresnel = (material.diffuse_shader == "FRESNEL") or (material.raytrace_transparency.fresnel > 0)  # TODO: more options to enable fresnel?
         applyDiffuseScale = True  # Conditional replaced later if intensity is used as a blend factor
         
-        # Alpha textures are forbidden for area lights
-        if not hasEmission and 'alpha' in textureMap:
-            workDictionary['alpha'] = make_path_relative_to_root(material.texture_slots[textureMap['alpha']].texture.image.filepath)
+        # Keep the top level around to add alpha after every material cleans itself
+        topLevelDict = workDictionary
 
         # Check which combination is given and export the appropriate material
         if hasEmission: 
@@ -571,6 +570,10 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
             if not (material.diffuse_shader == "LAMBERT" or material.diffuse_shader == "FRESNEL"):
                 self.report({'WARNING'}, ("Unsupported diffuse material: \"%s\". Exporting as Lambert material." % (material.name)))
             write_lambert_material(workDictionary, textureMap, material, applyDiffuseScale)
+        
+        # Alpha textures are forbidden for area lights
+        if not hasEmission and 'alpha' in textureMap:
+            topLevelDict['alpha'] = make_path_relative_to_root(material.texture_slots[textureMap['alpha']].texture.image.filepath)
             
 
     # Scenarios
