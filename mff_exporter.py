@@ -567,9 +567,10 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
         if hasDiffuse:
             if material.diffuse_shader == "OREN_NAYAR":
                 write_orennayar_material(workDictionary, textureMap, material, applyDiffuseScale)
-            if not (material.diffuse_shader == "LAMBERT" or material.diffuse_shader == "FRESNEL"):
-                self.report({'WARNING'}, ("Unsupported diffuse material: \"%s\". Exporting as Lambert material." % (material.name)))
-            write_lambert_material(workDictionary, textureMap, material, applyDiffuseScale)
+            else:
+                if not (material.diffuse_shader == "LAMBERT" or material.diffuse_shader == "FRESNEL"):
+                    self.report({'WARNING'}, ("Unsupported diffuse material: \"%s\". Exporting as Lambert material." % (material.name)))
+                write_lambert_material(workDictionary, textureMap, material, applyDiffuseScale)
         
         # Alpha textures are forbidden for area lights
         if not hasEmission and 'alpha' in textureMap:
