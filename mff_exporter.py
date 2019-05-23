@@ -1,3 +1,4 @@
+
 import bpy
 import bmesh
 import ctypes
@@ -48,7 +49,7 @@ class CustomJSONEncoder(json.JSONEncoder):
 def flip_space(vec):
     return [vec[0], vec[2], -vec[1]]
 
-materialKeys = ["alpha", "type", "albedo", "roughness", "ndf", "absorption", "radiance", "scale", "refractionIndex", "factorA", "factorB", "layerA", "layerB", "layerReflection", "layerRefraction"]
+materialKeys = ["alpha", "displacement", "type", "albedo", "roughness", "ndf", "absorption", "radiance", "scale", "refractionIndex", "factorA", "factorB", "layerA", "layerB", "layerReflection", "layerRefraction"]
 rootFilePath = ""
 
 
@@ -229,7 +230,7 @@ def create_per_frame_object(scn, instance, animationObjects, frame_range, nameSn
 
 def export_json(context, self, filepath, binfilepath, use_selection, overwrite_default_scenario,
                 export_animation):
-    version = "1.1"
+    version = "1.3"
     binary = os.path.relpath(binfilepath, os.path.commonpath([filepath, binfilepath]))
     global rootFilePath; rootFilePath = os.path.dirname(filepath)
 
@@ -508,6 +509,11 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
                     self.report({'WARNING'}, ("Too many alpha textures: \"%s\",\"%s\" from material: \"%s\"." % (material.texture_slots[textureMap['alpha']].name, textureSlot.name, material.name)))
                 else:
                     textureMap['alpha'] = j
+            if textureSlot.use_map_displacement:
+                if 'displacement' in textureMap:
+                    self.report({'WARNING'}, ("Too many displacement textures: \"%s\",\"%s\" from material: \"%s\"." % (material.texture_slots[textureMap['displacement']].name, textureSlot.name, material.name)))
+                else:
+                    textureMap['displacement'] = j
 
         # Check for Multi-Layer material
         hasRefraction = material.use_transparency and (material.alpha < 1)
@@ -575,6 +581,12 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
         # Alpha textures are forbidden for area lights
         if not hasEmission and 'alpha' in textureMap:
             topLevelDict['alpha'] = make_path_relative_to_root(material.texture_slots[textureMap['alpha']].texture.image.filepath)
+            
+        if 'displacement' in textureMap:
+            topLevelDict['displacement'] = collections.OrderedDict()
+            topLevelDict['displacement']['map'] = make_path_relative_to_root(material.texture_slots[textureMap['displacement']].texture.image.filepath)
+            if material.texture_slots[textureMap['displacement']].displacement_factor != 1:
+                topLevelDict['displacement']['scale'] = material.texture_slots[textureMap['displacement']].displacement_factor
             
 
     # Scenarios
