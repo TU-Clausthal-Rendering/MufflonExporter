@@ -868,7 +868,7 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
         for j in range(len(lodLevels)):
             binary.extend((0).to_bytes(8, byteorder='little'))  # has to be corrected when the value is known
         for j in range(len(lodLevels)):
-            lodObject = lodLevels[(lodChainStart+j) % len(lodLevels)]  # for the correct starting object
+            lodObject = lodLevels[(lodChainStart+j+1) % len(lodLevels)]  # for the correct starting object
             # start Positions
             write_num(binary, lodStartBinaryPosition + j*8, 8, len(binary))
             # Type
