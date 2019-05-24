@@ -228,6 +228,28 @@ def create_per_frame_object(scn, instance, animationObjects, frame_range, nameSn
         obj.select = True
         animationObjects.append(obj)
 
+# Check if the transformation is valid. In case of spheres there should not be a rotation or
+# non-uniform scaling.
+def validate_transformation(self, instance):
+    if "sphere" in instance:
+        if instance.rotation_euler != mathutils.Euler((0.0, 0.0, 0.0), 'XYZ'):
+            self.report({'WARNING'}, ("Perfect sphere object \"%s\" has a rotation which will be ignored." % (instance.name)))
+        if instance.scale[0] != instance.scale[1] or instance.scale[0] != instance.scale[2]:
+            self.report({'WARNING'}, ("Perfect sphere object \"%s\" has a non-uniform scaling which will be ignored (using x-scale as uniform scale)." % (instance.name)))
+        return mathutils.Matrix.Translation(instance.location) * mathutils.Matrix.Scale(instance.scale[0], 4)
+    else:
+        return instance.matrix_world
+
+def write_instance_transformation(binary, transformMat):
+    # Apply the flip_space transformation on instance transformation level.
+    binary.extend(struct.pack('<4f', *transformMat[0]))
+    binary.extend(struct.pack('<4f', *transformMat[2]))
+    for k in range(4):
+        binary.extend(struct.pack('<f', -transformMat[1][k]))
+
+
+
+
 def export_json(context, self, filepath, binfilepath, use_selection, overwrite_default_scenario,
                 export_animation):
     version = "1.3"
@@ -1138,7 +1160,8 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
     binary.extend((0).to_bytes(4, byteorder='little'))  # has to be corrected later
     numberOfInstances = 0
     print("Exporting animated instances...")
-    # Export animated object-instances separately as they don't need per-frame treatment
+    # Export animated object-instances (different meshes per frame) separately as
+    # they don't need per-frame treatment
     for instanceIdx in range(0, len(animationObjects)):
         animatedInstance = animationObjects[instanceIdx]
         index = exportedObjects[animatedInstance.data]
@@ -1148,12 +1171,8 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
         keyframe = frame_range[0] + (instanceIdx % len(frame_range))
         binary.extend(keyframe.to_bytes(4, byteorder='little')) # Keyframe
         binary.extend((0xFFFFFFFF).to_bytes(4, byteorder='little'))  # TODO Instance ID
-        transformMat = animatedInstance.matrix_world
-        # Apply the flip_space transformation on instance transformation level.
-        binary.extend(struct.pack('<4f', *transformMat[0]))
-        binary.extend(struct.pack('<4f', *transformMat[2]))
-        for k in range(4):
-            binary.extend(struct.pack('<f', -transformMat[1][k]))
+        transformMat = validate_transformation(self, animatedInstance)
+        write_instance_transformation(binary, transformMat)
         numberOfInstances += 1
         # Remove the animated object
         bpy.ops.object.select_all(action='DESELECT')
@@ -1167,9 +1186,10 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
         instanceAnimated = False
         for f in frame_range:
             scn.frame_set(f)
-            if not instanceAnimated and len(transMats) > 0 and transMats[0] != currentInstance.matrix_world:
+            transformMat = validate_transformation(self, currentInstance)
+            if not instanceAnimated and len(transMats) > 0 and transMats[0] != transformMat:
                 instanceAnimated = True
-            transMats.append(currentInstance.matrix_world.copy())
+            transMats.append(transformMat.copy())
         scn.frame_set(frame_current)
         if not instanceAnimated:
             transMats = [transMats[0]]
@@ -1180,12 +1200,7 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
             keyframe = (frame_range[0] + f) if instanceAnimated else 0xFFFFFFFF
             binary.extend(keyframe.to_bytes(4, byteorder='little')) # Keyframe
             binary.extend((0xFFFFFFFF).to_bytes(4, byteorder='little'))  # TODO Instance ID
-            transformMat = transMats[f]
-            # Apply the flip_space transformation on instance transformation level.
-            binary.extend(struct.pack('<4f', *transformMat[0]))
-            binary.extend(struct.pack('<4f', *transformMat[2]))
-            for k in range(4):
-                binary.extend(struct.pack('<f', -transformMat[1][k]))
+            write_instance_transformation(binary, transMats[f])
             numberOfInstances += 1
         
     # Now that we're done we know the amount of instances
