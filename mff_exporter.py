@@ -133,7 +133,7 @@ def write_walter_material(workDictionary, textureMap, material):
         workDictionary['ndf'] = material["ndf"]
     else:
         workDictionary['ndf'] = "GGX"  # Default normal distribution function
-    absorptionFactor = math.pow(1-material.alpha, 2.0)
+    absorptionFactor = 1 / math.pow(1-material.alpha, 2.0) - 1
     workDictionary['absorption'] = [material.diffuse_color.r*absorptionFactor, material.diffuse_color.g*absorptionFactor, material.diffuse_color.b*absorptionFactor]
     workDictionary['ior'] = material.raytrace_transparency.ior
 
