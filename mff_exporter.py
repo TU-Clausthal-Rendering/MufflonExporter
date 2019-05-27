@@ -895,9 +895,27 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
                 bmesh.ops.triangulate(bm, faces=facesToTriangulate[:], quad_method=0, ngon_method=0)
                 # Split vertices if vertex has multiple uv coordinates (is used in multiple triangles)
                 # or if it is not smooth
-                if 'uv_layers' in lodObject.data and len(lodObject.data.uv_layers):
+                if len(lodObject.data.uv_layers) > 0:
+                    # Query the layer the object is on
+                    layer = -1
+                    for i in range(0, len(lodObject.layers)):
+                        if lodObject.layers[i]:
+                            layer = i
+                            break
+                    if layer == -1:
+                        self.report({'WARNING'}, ("LoD object \"%s\" to create seams for does not exist on any layer." % (lodObject.name)))
+                    currLayerState = bpy.context.scene.layers[layer]
+                    currContextType = bpy.context.area.type
+                    bpy.context.scene.layers[layer] = True
+                    bpy.context.area.type = 'VIEW_3D'
+                    bpy.ops.object.mode_set(mode='EDIT')
                     # mark seams from uv islands
                     bpy.ops.uv.seams_from_islands()
+                    bpy.context.scene.layers[layer] = currLayerState
+                    bpy.context.area.type = currContextType
+                for e in bm.edges:
+                    if e.seam:
+                        print("Found seam")
                 edgesToSplit = [e for e in bm.edges if e.seam or not e.smooth
                     or not all(f.smooth for f in e.link_faces)]
                 bmesh.ops.split_edges(bm, edges=edgesToSplit)
