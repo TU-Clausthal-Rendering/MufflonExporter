@@ -144,6 +144,20 @@ def write_fresnel_material(workDictionary, textureMap, material):
     workDictionary['ior'] = [material.diffuse_fresnel, material.diffuse_fresnel_factor]
     workDictionary['layerRefraction'] = collections.OrderedDict()
     workDictionary['layerReflection'] = collections.OrderedDict()
+    
+def write_microfacet_material(workDictionary, textureMap, material):
+    workDictionary['type'] = "microfacet"
+    workDictionary['ior'] = material.raytrace_transparency.ior
+    if 'roughness' in textureMap:
+        workDictionary['roughness'] = make_path_relative_to_root(material.texture_slots[textureMap['roughness']].texture.image.filepath)
+    else:
+        workDictionary['roughness'] = math.pow(1 - material.specular_hardness / 511, 3)  # Max hardness = 511
+    if "ndf" in material:
+        workDictionary['ndf'] = material["ndf"]
+    else:
+        workDictionary['ndf'] = "GGX"  # Default normal distribution function
+    absorptionFactor = 1 / math.pow(1-material.alpha, 2.0) - 1
+    workDictionary['absorption'] = [material.diffuse_color.r*absorptionFactor, material.diffuse_color.g*absorptionFactor, material.diffuse_color.b*absorptionFactor]
 
 def write_blend_material(workDictionary, textureMap, material, factorA, factorB):
     for key in materialKeys: # Delete all material keys which might exist due to a change of the material
@@ -239,6 +253,18 @@ def validate_transformation(self, instance):
         return mathutils.Matrix.Translation(instance.location) * mathutils.Matrix.Scale(instance.scale[0], 4)
     else:
         return instance.matrix_world
+        
+# Computes the UV coordinate of a vertex based on spherical projection
+def spherical_projected_uv_coordinate(vertexCoords):
+    theta = math.acos(vertexCoords[1]/((1e-20 + math.sqrt((vertexCoords[0]*vertexCoords[0]) + (vertexCoords[1]*vertexCoords[1]) + (vertexCoords[2]*vertexCoords[2])))))
+    phi = numpy.arctan2(vertexCoords[2], vertexCoords[0])
+    if theta < 0:
+        theta += math.pi
+    if(phi < 0):
+        phi += 2*math.pi
+    u = theta / math.pi
+    v = phi / (2*math.pi)
+    return [u, v]
 
 def write_instance_transformation(binary, transformMat):
     # Apply the flip_space transformation on instance transformation level.
@@ -553,21 +579,32 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
         # Check which combination is given and export the appropriate material
         if hasEmission: 
             # Always blend emission additive
-            if hasDiffuse or hasReflection or hasRefraction:
+            if hasDiffuse:
                 write_blend_material(workDictionary, textureMap, material, 1.0, 1.0)
                 write_emissive_material(workDictionary['layerA'], textureMap, material)
                 workDictionary = workDictionary['layerB']
             else: # No blending (emission is the only layer)
+                if hasReflection or hasRefraction:
+                    self.report({'WARNING'}, ("Unsupported emission material: \"%s\". Exporting as simple emissive material." % (material.name)))
                 write_emissive_material(workDictionary, textureMap, material)
-
-        if hasReflection:
+        if hasReflection and not hasEmission:
             # Blend with fresnel or constant value
-            if hasRefraction or hasDiffuse:
+            if hasRefraction:
+                if useFresnel:
+                    # Use efficient microfacet model
+                    write_microfacet_material(workDictionary, textureMap, material)
+                else:
+                    # Blend from torrance-walter
+                    factorB = 1-material.specular_intensity if hasRefraction else material.diffuse_intensity
+                    applyDiffuseScale = False # in both cases: if Refr+Diffuse the diffuse_intensity will also be used as blend factor.
+                    write_blend_material(workDictionary, textureMap, material, material.specular_intensity, factorB)
+                    write_torrance_material(workDictionary['layerA'], textureMap, material, False, self)
+                    workDictionary = workDictionary['layerB']
+            elif hasDiffuse:
                 if useFresnel:
                     write_fresnel_material(workDictionary, textureMap, material)
                     write_torrance_material(workDictionary['layerReflection'], textureMap, material, True, self)
                     workDictionary = workDictionary['layerRefraction']
-                    # TODO: export glass instead
                 else:
                     factorB = 1-material.specular_intensity if hasRefraction else material.diffuse_intensity
                     applyDiffuseScale = False # in both cases: if Refr+Diffuse the diffuse_intensity will also be used as blend factor.
@@ -583,13 +620,13 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
                 else:
                     write_torrance_material(workDictionary, textureMap, material, True, self)
 
-        if hasRefraction:
+        if hasRefraction and not hasEmission:
             if hasDiffuse: # one last blending necessary
                 write_blend_material(workDictionary, textureMap, material, 1-material.diffuse_intensity, material.diffuse_intensity)
                 write_walter_material(workDictionary['layerA'], textureMap, material)
                 workDictionary = workDictionary['layerB']
                 applyDiffuseScale = False
-            else:
+            elif not (hasReflection and useFresnel):
                 write_walter_material(workDictionary, textureMap, material)
 
         if hasDiffuse:
@@ -913,9 +950,6 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
                     bpy.ops.uv.seams_from_islands()
                     bpy.context.scene.layers[layer] = currLayerState
                     bpy.context.area.type = currContextType
-                for e in bm.edges:
-                    if e.seam:
-                        print("Found seam")
                 edgesToSplit = [e for e in bm.edges if e.seam or not e.smooth
                     or not all(f.smooth for f in e.link_faces)]
                 bmesh.ops.split_edges(bm, edges=edgesToSplit)
@@ -978,20 +1012,13 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
                 if len(mesh.uv_layers) == 0:
                     self.report({'WARNING'}, ("LOD Object: \"%s\" has no uv layers." % (lodObject.name)))
                     for k in range(len(uvCoordinates)):
-                        theta = math.acos(vertices[k].co[1]/((1e-20 + math.sqrt((vertices[k].co[0]*vertices[k].co[0]) + (vertices[k].co[1]*vertices[k].co[1]) + (vertices[k].co[2]*vertices[k].co[2])))))
-                        phi = numpy.arctan2(vertices[k].co[2], vertices[k].co[0])
-                        if theta < 0:
-                            theta += math.pi
-                        if(phi < 0):
-                            phi += 2*math.pi
-                        u = theta / math.pi
-                        v = phi / (2*math.pi)
-                        uvCoordinates[k] = [u, v]
+                        uvCoordinates[k] = spherical_projected_uv_coordinate(vertices[k].co)
                 else:
                     uv_layer = mesh.uv_layers[0]
                     for polygon in mesh.polygons:
                         for loop_index in range(polygon.loop_start, polygon.loop_start + polygon.loop_total):
                             uvCoordinates[mesh.loops[loop_index].vertex_index] = uv_layer.data[loop_index].uv
+                                
                 vertexDataArray = bytearray()  # Used for deflation
                 for k in range(len(vertices)):
                     vertexDataArray.extend(struct.pack('<3f', *mesh.vertices[k].co))
