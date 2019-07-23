@@ -27,6 +27,525 @@ bl_info = {
 }
 
 
+# Brief notes; open issues are:
+# * Anisotropy currently has no way of being represented in the blender internal materials and is thus not exported
+# * Conversely, complex fresnel currently has no way of being represented in Cycle nodes and is thus not converted
+# * Alpha blending has to be plugged at the node closest to the material output as a blend of transparent + anything w. blend input from texture 'Alpha'
+# * Baking procedural textures ignores any UV input and uses a fixed resolution
+# * All and any texture slots occupied prior to node->internal conversion will be vacated
+# * Doesn't support many many node setups such as groups, ramping, math etc.; overall relatively brittle, but good enough to reduce material change complexity
+# * Toggles the material's use_nodes for successful conversions
+
+
+def find_output_node(tree):
+    for node in tree.nodes:
+        if node.bl_idname == 'ShaderNodeOutputMaterial' and node.is_active_output:
+            return node
+    return None
+    
+
+def bake_texture_node(node, material, outputName, isScalar):
+    print("Baking node '%s' of material '%s'"%(node.name, material.name))
+    # TODO: how to allow resolutions other than 1024x1024
+    # TODO: don't bake textures multiple times
+    bakeWidth = 1024
+    bakeHeight = 1024
+    
+    # Remember what object to select later
+    prevActiveObject = bpy.context.scene.objects.active
+    # Add a temporary plane
+    bpy.ops.object.select_all(action='DESELECT')
+    planeMesh = bpy.data.meshes.new("TemporaryPlane")
+    plane = bpy.data.objects.new("TemporaryPlaneObj", planeMesh)
+    bpy.context.scene.objects.link(plane)
+    bpy.context.scene.objects.active = plane
+    plane.select = True
+    planeMesh = bpy.context.object.data
+    bm = bmesh.new()
+    v0 = bm.verts.new((-1, -1, 0))
+    v1 = bm.verts.new((1, -1, 0))
+    v2 = bm.verts.new((1, 1, 0))
+    v3 = bm.verts.new((-1, 1, 0))
+    face = bm.faces.new((v0, v1, v2, v3))
+    bm.faces.ensure_lookup_table()
+    uv_layer = bm.loops.layers.uv.new()
+    face.loops[0][uv_layer].uv = (0, 0)
+    face.loops[1][uv_layer].uv = (1, 0)
+    face.loops[2][uv_layer].uv = (1, 1)
+    face.loops[3][uv_layer].uv = (0, 1)
+    bm.to_mesh(planeMesh)
+    bm.free()
+    
+    # Set the material as the sole one to the plane
+    plane.data.materials.append(material)
+    
+    # Remember the links of this node and the output node
+    outputNode = find_output_node(material.node_tree)
+    outNodeLinks = []
+    texNodeLinks = []
+    for link in material.node_tree.links:
+        if link.from_node == node:
+            texNodeLinks.append([link.to_socket, link.from_socket])
+            material.node_tree.links.remove(link)
+        elif link.to_node == outputNode:
+            outNodeLinks.append([link.to_socket, link.from_socket])
+            material.node_tree.links.remove(link)
+    
+    # Add an emissive shader and connect them
+    emissiveNode = material.node_tree.nodes.new('ShaderNodeEmission')
+    imageNode = material.node_tree.nodes.new('ShaderNodeTexImage')
+    if isScalar:
+        texEmissiveLink = material.node_tree.links.new(emissiveNode.inputs['Strength'], node.outputs[outputName])
+    else:
+        texEmissiveLink = material.node_tree.links.new(emissiveNode.inputs['Color'], node.outputs[outputName])
+    emissiveOutputLink = material.node_tree.links.new(outputNode.inputs['Surface'], emissiveNode.outputs['Emission'])
+    
+    # Create the directory for the image if necessary
+    imageFolder = os.path.join(os.path.abspath('//'), "baked_textures")
+    if not os.path.exists(imageFolder):
+        os.makedirs(imageFolder)
+        
+    # Bake the stuff
+    fileName = "//baked_textures//" + material.name + "_" + node.name + ".png"
+    bakeImage = bpy.data.images.new("TempBakeImage", width=bakeWidth, height=bakeHeight)
+    bakeImage.use_alpha = True
+    bakeImage.alpha_mode = 'STRAIGHT'
+    bakeImage.filepath = fileName
+    bakeImage.file_format = 'PNG'
+    imageNode.image = bakeImage
+    material.node_tree.nodes.active = imageNode
+    bpy.ops.object.bake(type='EMIT', pass_filter={'NONE'}, use_clear=True, width=bakeWidth, height=bakeHeight)
+    bakeImage.save()
+    
+    # Remove temporary nodes and links
+    material.node_tree.links.remove(texEmissiveLink)
+    material.node_tree.links.remove(emissiveOutputLink)
+    material.node_tree.nodes.remove(emissiveNode)
+    # Re-add the old links
+    for link in outNodeLinks:
+        material.node_tree.links.new(link[1], link[0])
+    for link in texNodeLinks:
+        material.node_tree.links.new(link[1], link[0])
+    
+    # Cleanup image and material
+    bpy.data.images.remove(bakeImage)
+    # Cleanup temporary plane
+    bpy.ops.object.select_all(action='DESELECT')
+    plane.select = True
+    bpy.ops.object.delete()
+    planeMesh.user_clear()
+    bpy.data.meshes.remove(planeMesh)
+    
+    # Restore object selection
+    bpy.context.scene.objects.active = prevActiveObject
+    return fileName
+    
+def property_array_to_color(prop_array):
+    return [ prop_array[0], prop_array[1], prop_array[2] ]
+
+def get_image_input(material, to_node, from_node, targetInputName, isScalar):
+    if from_node.bl_idname == 'ShaderNodeTexImage':
+        return from_node.image.filepath
+    else:
+        # Find out what socket we take things from
+        fromSocketName = to_node.inputs[targetInputName].links[0].from_socket.name
+        return bake_texture_node(from_node, material, fromSocketName, isScalar)
+
+def get_color_input(material, node, inputName):
+    input = node.inputs[inputName]
+    if len(input.links) == 0:
+        return property_array_to_color(input.default_value)
+    else:
+        return get_image_input(material, node, input.links[0].from_node, inputName, False)
+        
+def get_scalar_input(material, node, inputName):
+    input = node.inputs[inputName]
+    if len(input.links) == 0:
+        return input.default_value
+    else:
+        # TODO: support for converters!
+        return get_image_input(material, node, input.links[0].from_node, inputName, True)
+
+def get_scalar_def_only_input(node, inputName):
+    input = node.inputs[inputName]
+    if len(input.links) == 0:
+        return input.default_value
+    else:
+        raise Exception("non-value where only value is expected (node '%s.%s')"%(node.name, inputName))
+        
+def get_microfacet_distribution(self, materialName, node):
+    if node.distribution == 'SHARP':
+        # Doesn't matter since there's gonna be roughness 0
+        return 'GGX'
+    elif node.distribution == 'BECKMANN':
+        return 'BS'
+    elif node.distribution == 'MULTI_GGX':
+        # TODO: uhh do we have a parameter for this?
+        return 'GGX'
+    elif node.distribution != 'GGX':
+        self.report({'WARNING'}, ("Material '%s': unknown microfacet distribution; defaulting to GGX (node '%s')"%(materialName, node.name)))
+    return 'GGX'
+
+def write_emissive_node(self, material, node):
+    dict = collections.OrderedDict()
+    dict['type'] = 'emissive'
+    dict['radiance'] = get_color_input(material, node, 'Color')
+    dict['scale'] = get_scalar_def_only_input(node, 'Strength')
+    return dict
+    
+def write_diffuse_node(self, material, node):
+    dict = collections.OrderedDict()
+
+    if len(node.inputs['Roughness'].links) == 0:
+        # Differentiate between Lambert and Oren-Nayar
+        dict['albedo'] = get_color_input(material, node, 'Color')
+        if node.inputs['Roughness'].default_value == 0.0:
+            # Lambert
+            dict['type'] = 'lambert'
+        else:
+            # Oren-Nayar
+            dict['type'] = 'orennayar'
+            dict['roughness'] = get_scalar_def_only_input(node, 'Roughness')
+    else:
+        raise Exception("non-value for diffuse roughness (node '%s')"%(node.name))
+    
+    return dict
+    
+def write_torrance_node(self, material, node):
+    dict = collections.OrderedDict()
+    dict['type'] = 'torrance'
+    dict['albedo'] = get_color_input(material, node, 'Color')
+    if node.distribution == 'SHARP':
+        dict['roughness'] = 0.0
+    else:
+        dict['roughness'] = get_scalar_input(material, node, 'Roughness')
+    dict['ndf'] = get_microfacet_distribution(self, material.name, node)
+    # TODO: shadowing model
+    dict['shadowingModel'] = 'vcavity'
+    
+    # Check for anisotropy
+    if node.bl_idname == 'ShaderNodeBsdfAnisotropic':
+        # TODO: rotation of anisotropy!
+        # TODO: what to do about normal/tangent?
+        dict['roughness'] = [ dict['roughness'], get_scalar_def_only_input(node, 'Anisotropy') ]
+        if len(node.inputs['Rotation'].links) > 0 or node.inputs['Rotation'].default_value != 0.0:
+            self.report({'WARNING'}, ("Material '%s': Non-zero anisotropic rotation can currently not be converted properly"%(material.name)))
+        if len(node.inputs['Normal'].links) > 0:
+            self.report({'WARNING'}, ("Material '%s': Non-zero normal input is currently ignored"%(material.name)))
+        if len(node.inputs['Tangent'].links) > 0:
+            self.report({'WARNING'}, ("Material '%s': Non-zero tangent input is currently ignored"%(material.name)))
+    
+    return dict
+    
+def write_walter_node(self, material, node):
+    dict = collections.OrderedDict()
+    dict['type'] = 'walter'
+    dict['absorption'] = get_color_input(material, node, 'Color')
+    # Check if the 'color' is a string or none (which means no inverting possible)
+    # TODO: write 'color' out instead of absorption (since inverting a texture is difficult/expensive)
+    if (dict['absorption'] is not None) and not isinstance(dict['absorption'], str):
+        dict['absorption'][0] = 1.0 - dict['absorption'][0]
+        dict['absorption'][1] = 1.0 - dict['absorption'][1]
+        dict['absorption'][2] = 1.0 - dict['absorption'][2]
+    if node.distribution == 'SHARP':
+        dict['roughness'] = 0.0
+    else:
+        dict['roughness'] = get_scalar_input(material, node, 'Roughness')
+    # TODO: shadowing model
+    dict['shadowingModel'] = 'vcavity'
+    dict['ndf'] = get_microfacet_distribution(self, material.name, node)
+    dict['ior'] = get_scalar_def_only_input(node, 'IOR')
+    return dict
+    
+def write_nonrecursive_node(self, material, node):
+    # TODO: support for principled BSDF?
+    if node.bl_idname == 'ShaderNodeBsdfDiffuse':
+        return write_diffuse_node(self, material, node)
+    elif node.bl_idname == 'ShaderNodeBsdfGlossy' or node.bl_idname == 'ShaderNodeBsdfAnisotropic':
+        return write_torrance_node(self, material, node)
+    elif node.bl_idname == 'ShaderNodeBsdfGlass' or node.bl_idname == 'ShaderNodeBsdfRefraction':
+        return write_walter_node(self, material, node)
+    elif node.bl_idname == 'ShaderNodeEmission':
+        return write_emissive_node(self, material, node)
+    else:
+        # TODO: allow recursion? Currently not supported by our renderer
+        raise Exception("invalid mix-shader input (node '%s')"%(node.name))
+    
+def write_mix_node(self, material, node, hasAlphaAlready):
+    dict = collections.OrderedDict()
+    if len(node.inputs[1].links) == 0 or len(node.inputs[2].links) == 0:
+        raise Exception("missing mixed-shader input (node '%s')"%(node.name))
+    nodeA = node.inputs[1].links[0].from_node
+    nodeB = node.inputs[2].links[0].from_node
+    # First check if it's blend or fresnel
+    if len(node.inputs['Fac'].links) == 0 or node.inputs['Fac'].links[0].from_node.bl_idname == 'ShaderNodeValue':
+        # Blend
+        dict['type'] = 'blend'
+        dict['layerA'] = write_nonrecursive_node(self, material, nodeA)
+        dict['layerB'] = write_nonrecursive_node(self, material, nodeB)
+        # Emissive materials don't get blended, they're simply both
+        if (nodeA.bl_idname == 'ShaderNodeBsdfDiffuse' and nodeB.bl_idname == 'ShaderNodeEmission') or (nodeB.bl_idname == 'ShaderNodeBsdfDiffuse' and nodeA.bl_idname == 'ShaderNodeEmission'):
+            dict['factorB'] = 1.0
+            dict['factorA'] = 1.0
+        elif len(node.inputs['Fac'].links) > 0 and node.inputs['Fac'].links[0].from_node.bl_idname == 'ShaderNodeValue':
+            dict['factorB'] = node.inputs['Fac'].links[0].from_node.outputs[0].default_value
+            dict['factorA'] = 1 - dict['factorB']
+        else:
+            dict['factorB'] = node.inputs['Fac'].default_value
+            dict['factorA'] = 1 - dict['factorB']
+    elif node.inputs['Fac'].links[0].from_node.bl_idname == 'ShaderNodeFresnel' or node.inputs['Fac'].links[0].from_node.bl_idname == 'ShaderNodeLayerWeight':
+        # Fresnel
+        # Get the IOR
+        # TODO: how to realize complex IOR with nodes? Arghhh
+        # Layer weights are a bit weird: first off there are two possibilities (only one of which is valid), secondly
+        # the actual (front-facing) IOR is defined as 1 / (1 - blend)
+        facNode = node.inputs['Fac'].links[0].from_node
+        if facNode.bl_idname == 'ShaderNodeLayerWeight':
+            if node.inputs['Fac'].links[0].from_socket.identifier == 'Facing':
+                raise Exception("cannot use 'Facing' output from layer weight for mixing shaders (node '%s')"%(node.name))
+            fresnelIor = 1.0 / (1.0 - max(get_scalar_def_only_input(facNode, 'Blend'), 0.001))
+        else:
+            fresnelIor = get_scalar_def_only_input(facNode, 'IOR')
+        
+        if len(facNode.inputs['Normal'].links) > 0:
+            self.report({'WARNING'}, ("Material '%s': Non-zero normal input is currently ignored"%(material.name)))
+        
+        # Check if we have a full microfacet model
+        if (nodeA.bl_idname == 'ShaderNodeBsdfGlossy' or nodeA.bl_idname == 'ShaderNodeBsdfAnisotropic') and (nodeB.bl_idname == 'ShaderNodeBsdfGlass' or nodeB.bl_idname == 'ShaderNodeBsdfRefraction'):
+            dict = write_walter_node(self, material, nodeB)
+            dict['type'] = 'microfacet'
+            # Warn about disagreements in roughness/absorption/ndf
+            tempDict = write_torrance_node(self, material, nodeA)
+            if dict['roughness'] != tempDict['roughness']:
+                self.report({'WARNING'}, ("Material '%s': fresnel layers disagree about roughness; using refractive layer's value (node '%s')"%(material.name, node.name)))
+            if dict['ndf'] != tempDict['ndf']:
+                self.report({'WARNING'}, ("Material '%s': fresnel layers disagree about ndf; using refractive layer's value (node '%s')"%(material.name, node.name)))
+            if dict['absorption'] != tempDict['albedo']:
+                self.report({'WARNING'}, ("Material '%s': fresnel layers disagree about absorption; using refractive layer's value (node '%s')"%(material.name, node.name)))
+            if dict['shadowingModel'] != tempDict['shadowingModel']:
+                self.report({'WARNING'}, ("Material '%s': fresnel layers disagree about shadowing model; using refractive layer's value (node '%s')"%(material.name, node.name)))
+            if dict['ior'] != fresnelIor:
+                self.report({'WARNING'}, ("Material '%s': refractive layer disagrees with fresnel node about the IOR; using fresnel node's value (node '%s')"%(material.name, node.name)))
+                dict['ior'] = fresnelIor
+        else:
+            dict['type'] = 'fresnel'
+            dict['ior'] = get_scalar_def_only_input(node.inputs['Fac'].links[0].from_node, 'IOR')
+            dict['layerRefraction'] = write_nonrecursive_node(self, material, nodeA)
+            dict['layerReflection'] = write_nonrecursive_node(self, material, nodeB)
+            # TODO: extinction coefficient...
+    elif node.inputs['Fac'].links[0].from_node.bl_idname.startswith('ShaderNodeTex'):
+        # TODO: alpha from non-alpha channel texture!
+        if hasAlphaAlready:
+            raise Exception("material may not have more than one alpha blending (node '%s')"%(node.name))
+        # We have a texture input at our hands: if it's alpha we can do smth with it!
+        if node.inputs['Fac'].links[0].from_socket.name != 'Alpha':
+            raise Exception("blend input for mix shader has to be 'Alpha' if it comes from a texture node (node '%s')"%(node.name))
+        # Check if one of the layers is transparent and recursively call the material conversion
+        if nodeA.bl_idname == 'ShaderNodeBsdfTransparent':
+            if nodeB.bl_idname == 'ShaderNodeMixShader':
+                dict = write_mix_node(self, material, nodeB, True)
+            else:
+                dict = write_nonrecursive_node(self, material, nodeB)
+        elif nodeB.bl_idname == 'ShaderNodeBsdfTransparent':
+            if nodeA.bl_idname == 'ShaderNodeMixShader':
+                dict = write_mix_node(self, material, nodeA, True)
+            else:
+                dict = write_nonrecursive_node(self, material, nodeA)
+        else:
+            raise Exception("alpha blending requires one transparent node for the mix shader (node '%s')"%(node.name))
+        # TODO: convert alpha channel to x channel!
+        dict["alpha"] = get_image_input(material, node, node.inputs['Fac'].links[0].from_node, 'Fac', True)
+    else:
+        raise Exception("invalid mix-shader factor input (node '%s')"%(node.name))
+        
+    return dict
+    
+def add_texture_and_texture_slot(material, textures, images, textureSuffix, texturePath):
+    # Add texture
+    textureName = material.name + " " + textureSuffix
+    texIndex = textures.find(textureName)
+    if texIndex < 0:
+        texture = textures.new(textureName, 'IMAGE')
+        texture.image = images.load(texturePath, True)
+        texIndex = textures.find(textureName)
+
+    # Add slot
+    slot = material.texture_slots.add()
+    slot.use_map_color_diffuse = False
+    slot.texture = textures[texIndex]
+    return slot
+
+def set_internal_diffuse_material_from_node_dictionary(textures, images, material, dict):
+    if isinstance(dict['albedo'], str):
+        slot = add_texture_and_texture_slot(material, textures, images, "diffuse albedo", dict['albedo'])
+        slot.use_map_color_diffuse = True
+        slot.diffuse_color_factor = 1.0
+    else:
+        material.diffuse_color = dict['albedo']
+    
+    if 'roughness' not in dict or dict['roughness'] == 0.0:
+        material.diffuse_shader = 'LAMBERT'
+    else:
+        material.diffuse_shader = 'OREN_NAYAR'
+        material.roughness = dict['roughness']
+    material.diffuse_intensity = 1.0
+
+def set_internal_emissive_material_from_node_dictionary(textures, images, material, dict):
+    if isinstance(dict['radiance'], str):
+        slot = add_texture_and_texture_slot(material, textures, images, "emissive radiance", dict['radiance'])
+        slot.use_map_emit = True
+        slot.emit_factor = dict['scale']
+    else:
+        material.diffuse_color = dict['radiance']
+        material.emit = dict['scale']
+
+def set_internal_torrance_material_from_node_dictionary(textures, images, material, dict):
+    if isinstance(dict['albedo'], str):
+        slot = add_texture_and_texture_slot(material, textures, images, "specular albedo", dict['albedo'])
+        slot.use_map_color_spec = True
+        slot.specular_color_factor = 1.0
+    else:
+        material.specular_color = dict['albedo']
+    if isinstance(dict['roughness'], str):
+        slot = add_texture_and_texture_slot(material, textures, images, "specular roughness", dict['roughness'])
+        slot.use_map_hardness = True
+        slot.hardness_factor = 1.0
+    else:
+        if isinstance(dict['roughness'], float):
+            material.specular_hardness = 511 * (1 - pow(dict['roughness'], 1.0/3.0))
+        else:
+            # TODO: warn about lost anisotropy?
+            material.specular_hardness = 511 * (1 - pow(dict['roughness'][0], 1.0/3.0))
+    
+    material.specular_shader = 'COOKTORR'
+    material['ndf'] = dict['ndf']
+
+def set_internal_walter_material_from_node_dictionary(textures, images, material, dict):
+    material.use_transparency = True
+    material.transparency_method = 'RAYTRACE'
+    material.alpha = 0.0
+    if isinstance(dict['roughness'], str):
+        slot = add_texture_and_texture_slot(material, textures, images, "refractive roughness", dict['roughness'])
+        slot.use_map_hardness = True
+        slot.hardness_factor = 1.0
+    else:
+        material.raytrace_transparency.gloss_factor = 1.0 - dict['roughness']
+    material.raytrace_transparency.ior = dict['ior']
+    material['ndf'] = dict['ndf']
+    
+def set_internal_nonrecursive_material_from_node_dictionary(textures, images, material, dict):
+    if dict['type'] == 'lambert' or dict['type'] == 'orennayar':
+        set_internal_diffuse_material_from_node_dictionary(textures, images, material, dict)
+    elif dict['type'] == 'emissive':
+        set_internal_emissive_material_from_node_dictionary(textures, images, material, dict)
+    elif dict['type'] == 'torrance':
+        set_internal_torrance_material_from_node_dictionary(textures, images, material, dict)
+    elif dict['type'] == 'walter':
+        set_internal_walter_material_from_node_dictionary(textures, images, material, dict)
+    elif dict['type'] == 'microfacet':
+        set_internal_walter_material_from_node_dictionary(textures, images, material, dict)
+        material.specular_intensity = 1.0
+        material.specular_color = material.diffuse_color
+        material.specular_hardness = 511 * (1.0 - pow(material.raytrace_transparency.gloss_factor, 1.0/3.0))
+        material.raytrace_transparency.fresnel = 1.0
+    else:
+        raise Exception("has invalid non-recursive material type '%s'"%(dict['type']))
+        
+    # Setup alpha
+    if "alpha" in dict:
+        slot = add_texture_and_texture_slot(material, textures, images, "alpha", dict['alpha'])
+        slot.use_map_alpha = True
+        slot.alpha_factor = 1.0
+    
+
+def set_internal_material_from_node_dictionary(textures, images, material, dict):
+    # Clear all texture slots to avoid conflicts
+    for texKey in material.texture_slots.keys():
+        material.texture_slots.clear(material.texture_slots.find(texKey))
+        
+    # Clear all blending
+    material.diffuse_intensity = 0.0
+    material.specular_intensity = 0.0
+    material.emit = 0.0
+    material.ambient = 0.0
+    material.translucency = 0.0
+    material.use_diffuse_ramp = 0.0
+    material.use_specular_ramp = 0.0
+    material.use_shadeless = 0.0
+    material.use_tangent_shading = 0.0
+    material.use_cubic = 0.0
+    material.raytrace_mirror.use = False
+    material.subsurface_scattering.use = False
+
+    if dict['type'] == 'blend':
+        set_internal_nonrecursive_material_from_node_dictionary(textures, images, material, dict['layerA'])
+        set_internal_nonrecursive_material_from_node_dictionary(textures, images, material, dict['layerB'])
+        if dict['layerA']['type'] == 'lambert' or dict['layerA']['type'] == 'orennayar':
+            material.diffuse_intensity = dict['factorA']
+        elif dict['layerA']['type'] == 'torrance':
+            material.specular_intensity = dict['factorA']
+        if dict['layerB']['type'] == 'lambert' or dict['layerB']['type'] == 'orennayar':
+            material.diffuse_intensity = dict['factorB']
+        elif dict['layerB']['type'] == 'torrance':
+            material.specular_intensity = dict['factorB']
+    elif dict['type'] == 'fresnel':
+        set_internal_nonrecursive_material_from_node_dictionary(textures, images, material, dict['layerRefraction'])
+        set_internal_nonrecursive_material_from_node_dictionary(textures, images, material, dict['layerReflection'])
+        if dict['layerRefraction']['type'] == 'walter':
+            material.raytrace_transparency.fresnel = 1.0
+        else:
+            material.diffuse_shader = 'FRESNEL'
+            if isinstance(dict['ior'], float):
+                material.diffuse_fresnel = dict['ior']
+                material.diffuse_fresnel_factor = 0.0
+            else:
+                material.diffuse_fresnel = dict['ior'][0]
+                material.diffuse_fresnel_factor = dict['ior'][1]
+    else:
+        set_internal_nonrecursive_material_from_node_dictionary(textures, images, material, dict)
+
+
+def convert_materials_to_blender_internal(self):
+    print("Converting node materials...")
+    # Switch to cycles for baking
+    oldEngine = bpy.context.scene.render.engine
+    bpy.context.scene.render.engine = 'CYCLES'
+    
+    convertedAllMaterials = True
+    for material in bpy.data.materials:
+        if material.use_nodes:
+            # First get the node that actually determines the material properties
+            outputNode = find_output_node(material.node_tree)
+            if outputNode is None:
+                print("Skipping material '%s' (no output node)..."%(material.name))
+                continue
+            # Then handle surface properties: check the connections backwards
+            if len(outputNode.inputs['Surface'].links) == 0:
+                print("Skipping material '%s' (no connection to surface output)..."%(material.name))
+                continue
+            
+            # Casing: mix shader vs single input
+            firstNode = outputNode.inputs['Surface'].links[0].from_node
+            try:
+                if firstNode.bl_idname == 'ShaderNodeMixShader':
+                    workDictionary = write_mix_node(self, material, firstNode, False)
+                else:
+                    workDictionary = write_nonrecursive_node(self, material, firstNode)
+                # TODO: displacement
+                if len(outputNode.inputs['Displacement'].links):
+                    self.report({'WARNING'}, ("Material '%s': displacement output is not supported yet"(material.name)))
+                if len(outputNode.inputs['Volume'].links):
+                    self.report({'WARNING'}, ("Material '%s': volume output is not supported yet"(material.name)))
+                set_internal_material_from_node_dictionary(bpy.data.textures, bpy.data.images, material, workDictionary)
+                material.use_nodes = False
+            except Exception as e:
+                self.report({'ERROR'}, ("Material '%s' not converted: %s"%(material.name, str(e))))
+                convertedAllMaterials = False
+    
+    bpy.context.scene.render.engine = oldEngine
+    return convertedAllMaterials
+
+
 
 class CustomJSONEncoder(json.JSONEncoder):
     # https://stackoverflow.com/questions/50700585/write-json-float-in-scientific-notation
@@ -1350,9 +1869,19 @@ class MufflonExporter(Operator, ExportHelper):
             description="Exports instance transformations per animation frame",
             default=False,
             )
+    convert_materials = BoolProperty(
+            name="Convert node materials",
+            description="Converts node-baed materials into internal (and exportable) material representation prior to export",
+            default=False,
+            )
     path_mode = path_reference_mode
 
     def execute(self, context):
+        if self.convert_materials:
+            if not convert_materials_to_blender_internal(self):
+                print("Failed converting materials")
+                print("Stopped exporting")
+                return {'CANCELLED'}
         return export_mufflon(context, self, self.filepath, self.use_selection,
                               self.use_deflation, self.use_compression,
                               self.overwrite_default_scenario, self.triangulate,
