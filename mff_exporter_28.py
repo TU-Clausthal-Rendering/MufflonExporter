@@ -281,6 +281,12 @@ def write_nonrecursive_node(self, material, node):
     else:
         # TODO: allow recursion? Currently not supported by our renderer
         raise Exception("invalid mix-shader input (node '%s')"%(node.name))
+        
+def write_glass_node(self, material, node):
+    dict = collections.OrderedDict()
+    dict = write_walter_node(self, material, node)
+    dict['type'] = 'microfacet'
+    return dict
     
 def write_mix_node(self, material, node, hasAlphaAlready):
     dict = collections.OrderedDict()
@@ -294,6 +300,14 @@ def write_mix_node(self, material, node, hasAlphaAlready):
         dict['type'] = 'blend'
         dict['layerA'] = write_nonrecursive_node(self, material, nodeA)
         dict['layerB'] = write_nonrecursive_node(self, material, nodeB)
+        # Check validity
+        if not ((dict['layerA']['type'] == 'lambert' and dict['layerB']['type'] == 'emissive') or
+                (dict['layerA']['type'] == 'emissive' and dict['layerB']['type'] == 'lambert') or
+                (dict['layerA']['type'] == 'lambert' and dict['layerB']['type'] == 'torrance') or
+                (dict['layerA']['type'] == 'torrance' and dict['layerB']['type'] == 'lambert') or
+                (dict['layerA']['type'] == 'walter' and dict['layerB']['type'] == 'torrance') or
+                (dict['layerA']['type'] == 'torrance' and dict['layerB']['type'] == 'walter')):
+            raise Exception("invalid shader blend combination %s with %s (node %s)"%(nodeA.bl_idname, nodeB.bl_idname, node.name))
         # Emissive materials don't get blended, they're simply both
         if (nodeA.bl_idname == 'ShaderNodeBsdfDiffuse' and nodeB.bl_idname == 'ShaderNodeEmission') or (nodeB.bl_idname == 'ShaderNodeBsdfDiffuse' and nodeA.bl_idname == 'ShaderNodeEmission'):
             dict['factorB'] = 1.0
@@ -343,6 +357,12 @@ def write_mix_node(self, material, node, hasAlphaAlready):
             dict['ior'] = get_scalar_def_only_input(node.inputs['Fac'].links[0].from_node, 'IOR')
             dict['layerRefraction'] = write_nonrecursive_node(self, material, nodeA)
             dict['layerReflection'] = write_nonrecursive_node(self, material, nodeB)
+            # Check validity
+            if not ((dict['layerReflection']['type'] == 'lambert' and dict['layerRefraction']['type'] == 'torrance') or
+                    (dict['layerReflection']['type'] == 'torrance' and dict['layerRefraction']['type'] == 'lambert') or
+                    (dict['layerReflection']['type'] == 'walter' and dict['layerRefraction']['type'] == 'torrance') or
+                    (dict['layerReflection']['type'] == 'torrance' and dict['layerRefraction']['type'] == 'walter')):
+                raise Exception("invalid shader fresnel combination %s with %s (node %s)"%(nodeA.bl_idname, nodeB.bl_idname, node.name))
             # TODO: extinction coefficient...
     elif node.inputs['Fac'].links[0].from_node.bl_idname.startswith('ShaderNodeTex'):
         # TODO: alpha from non-alpha channel texture!
@@ -355,11 +375,15 @@ def write_mix_node(self, material, node, hasAlphaAlready):
         if nodeA.bl_idname == 'ShaderNodeBsdfTransparent':
             if nodeB.bl_idname == 'ShaderNodeMixShader':
                 dict = write_mix_node(self, material, nodeB, True)
+            elif nodeB.bl_idname == 'ShaderNodeBsdfGlass':
+                dict = write_glass_node(self, material, nodeB)
             else:
                 dict = write_nonrecursive_node(self, material, nodeB)
         elif nodeB.bl_idname == 'ShaderNodeBsdfTransparent':
             if nodeA.bl_idname == 'ShaderNodeMixShader':
                 dict = write_mix_node(self, material, nodeA, True)
+            elif nodeA.bl_idname == 'ShaderNodeBsdfGlass':
+                dict = write_glass_node(self, material, nodeA)
             else:
                 dict = write_nonrecursive_node(self, material, nodeA)
         else:
@@ -731,13 +755,15 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
         try:
             if firstNode.bl_idname == 'ShaderNodeMixShader':
                 workDictionary = write_mix_node(self, material, firstNode, False)
+            elif firstNode.bl_idname == 'ShaderNodeBsdfGlass':
+                workDictionary = write_glass_node(self, material, firstNode)
             else:
                 workDictionary = write_nonrecursive_node(self, material, firstNode)
             # TODO: displacement
             if len(outputNode.inputs['Displacement'].links):
-                self.report({'WARNING'}, ("Material '%s': displacement output is not supported yet"(material.name)))
+                self.report({'WARNING'}, ("Material '%s': displacement output is not supported yet"%(material.name)))
             if len(outputNode.inputs['Volume'].links):
-                self.report({'WARNING'}, ("Material '%s': volume output is not supported yet"(material.name)))
+                self.report({'WARNING'}, ("Material '%s': volume output is not supported yet"%(material.name)))
             # TODO: join the material dicts together
             dataDictionary['materials'][material.name] = workDictionary
         except Exception as e:

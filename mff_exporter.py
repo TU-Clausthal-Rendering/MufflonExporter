@@ -271,13 +271,19 @@ def write_nonrecursive_node(self, material, node):
         return write_diffuse_node(self, material, node)
     elif node.bl_idname == 'ShaderNodeBsdfGlossy' or node.bl_idname == 'ShaderNodeBsdfAnisotropic':
         return write_torrance_node(self, material, node)
-    elif node.bl_idname == 'ShaderNodeBsdfGlass' or node.bl_idname == 'ShaderNodeBsdfRefraction':
+    elif node.bl_idname == 'ShaderNodeBsdfRefraction':
         return write_walter_node(self, material, node)
     elif node.bl_idname == 'ShaderNodeEmission':
         return write_emissive_node(self, material, node)
     else:
         # TODO: allow recursion? Currently not supported by our renderer
         raise Exception("invalid mix-shader input (node '%s')"%(node.name))
+        
+def write_glass_node(self, material, node):
+    dict = collections.OrderedDict()
+    dict = write_walter_node(self, material, node)
+    dict['type'] = 'microfacet'
+    return dict
     
 def write_mix_node(self, material, node, hasAlphaAlready):
     dict = collections.OrderedDict()
@@ -291,6 +297,14 @@ def write_mix_node(self, material, node, hasAlphaAlready):
         dict['type'] = 'blend'
         dict['layerA'] = write_nonrecursive_node(self, material, nodeA)
         dict['layerB'] = write_nonrecursive_node(self, material, nodeB)
+        # Check validity
+        if not ((dict['layerA']['type'] == 'lambert' and dict['layerB']['type'] == 'emissive') or
+                (dict['layerA']['type'] == 'emissive' and dict['layerB']['type'] == 'lambert') or
+                (dict['layerA']['type'] == 'lambert' and dict['layerB']['type'] == 'torrance') or
+                (dict['layerA']['type'] == 'torrance' and dict['layerB']['type'] == 'lambert') or
+                (dict['layerA']['type'] == 'walter' and dict['layerB']['type'] == 'torrance') or
+                (dict['layerA']['type'] == 'torrance' and dict['layerB']['type'] == 'walter')):
+            raise Exception("invalid shader blend combination %s with %s (node %s)"%(nodeA.bl_idname, nodeB.bl_idname, node.name))
         # Emissive materials don't get blended, they're simply both
         if (nodeA.bl_idname == 'ShaderNodeBsdfDiffuse' and nodeB.bl_idname == 'ShaderNodeEmission') or (nodeB.bl_idname == 'ShaderNodeBsdfDiffuse' and nodeA.bl_idname == 'ShaderNodeEmission'):
             dict['factorB'] = 1.0
@@ -340,6 +354,12 @@ def write_mix_node(self, material, node, hasAlphaAlready):
             dict['ior'] = get_scalar_def_only_input(node.inputs['Fac'].links[0].from_node, 'IOR')
             dict['layerRefraction'] = write_nonrecursive_node(self, material, nodeA)
             dict['layerReflection'] = write_nonrecursive_node(self, material, nodeB)
+            # Check validity
+            if not ((dict['layerReflection']['type'] == 'lambert' and dict['layerRefraction']['type'] == 'torrance') or
+                    (dict['layerReflection']['type'] == 'torrance' and dict['layerRefraction']['type'] == 'lambert') or
+                    (dict['layerReflection']['type'] == 'walter' and dict['layerRefraction']['type'] == 'torrance') or
+                    (dict['layerReflection']['type'] == 'torrance' and dict['layerRefraction']['type'] == 'walter')):
+                raise Exception("invalid shader fresnel combination %s with %s (node %s)"%(nodeA.bl_idname, nodeB.bl_idname, node.name))
             # TODO: extinction coefficient...
     elif node.inputs['Fac'].links[0].from_node.bl_idname.startswith('ShaderNodeTex'):
         # TODO: alpha from non-alpha channel texture!
@@ -352,11 +372,15 @@ def write_mix_node(self, material, node, hasAlphaAlready):
         if nodeA.bl_idname == 'ShaderNodeBsdfTransparent':
             if nodeB.bl_idname == 'ShaderNodeMixShader':
                 dict = write_mix_node(self, material, nodeB, True)
+            elif nodeB.bl_idname == 'ShaderNodeBsdfGlass':
+                dict = write_glass_node(self, material, nodeB)
             else:
                 dict = write_nonrecursive_node(self, material, nodeB)
         elif nodeB.bl_idname == 'ShaderNodeBsdfTransparent':
             if nodeA.bl_idname == 'ShaderNodeMixShader':
                 dict = write_mix_node(self, material, nodeA, True)
+            elif nodeA.bl_idname == 'ShaderNodeBsdfGlass':
+                dict = write_glass_node(self, material, nodeA)
             else:
                 dict = write_nonrecursive_node(self, material, nodeA)
         else:
@@ -405,7 +429,7 @@ def set_internal_emissive_material_from_node_dictionary(textures, images, materi
         slot.emit_factor = dict['scale']
     else:
         material.diffuse_color = dict['radiance']
-        material.emit = dict['scale']
+        material.emit = dict['scale'][0]
 
 def set_internal_torrance_material_from_node_dictionary(textures, images, material, dict):
     if isinstance(dict['albedo'], str):
@@ -425,6 +449,7 @@ def set_internal_torrance_material_from_node_dictionary(textures, images, materi
             # TODO: warn about lost anisotropy?
             material.specular_hardness = 511 * (1 - pow(dict['roughness'][0], 1.0/3.0))
     
+    material.specular_intensity = 1.0
     material.specular_shader = 'COOKTORR'
     material['ndf'] = dict['ndf']
 
@@ -437,7 +462,11 @@ def set_internal_walter_material_from_node_dictionary(textures, images, material
         slot.use_map_hardness = True
         slot.hardness_factor = 1.0
     else:
-        material.raytrace_transparency.gloss_factor = 1.0 - dict['roughness']
+        if isinstance(dict['roughness'], float):
+            material.specular_hardness = 511 * (1 - pow(dict['roughness'], 1.0/3.0))
+        else:
+            # TODO: warn about lost anisotropy?
+            material.specular_hardness = 511 * (1 - pow(dict['roughness'][0], 1.0/3.0))
     material.raytrace_transparency.ior = dict['ior']
     material['ndf'] = dict['ndf']
     
@@ -454,7 +483,7 @@ def set_internal_nonrecursive_material_from_node_dictionary(textures, images, ma
         set_internal_walter_material_from_node_dictionary(textures, images, material, dict)
         material.specular_intensity = 1.0
         material.specular_color = material.diffuse_color
-        material.specular_hardness = 511 * (1.0 - pow(material.raytrace_transparency.gloss_factor, 1.0/3.0))
+        material.specular_hardness = 511 * (1.0 - pow(1.0 - material.raytrace_transparency.gloss_factor, 1.0/3.0))
         material.raytrace_transparency.fresnel = 1.0
     else:
         raise Exception("has invalid non-recursive material type '%s'"%(dict['type']))
@@ -536,13 +565,15 @@ def convert_materials_to_blender_internal(self):
             try:
                 if firstNode.bl_idname == 'ShaderNodeMixShader':
                     workDictionary = write_mix_node(self, material, firstNode, False)
+                elif firstNode.bl_idname == 'ShaderNodeBsdfGlass':
+                    workDictionary = write_glass_node(self, material, firstNode)
                 else:
                     workDictionary = write_nonrecursive_node(self, material, firstNode)
                 # TODO: displacement
                 if len(outputNode.inputs['Displacement'].links):
-                    self.report({'WARNING'}, ("Material '%s': displacement output is not supported yet"(material.name)))
+                    self.report({'WARNING'}, ("Material '%s': displacement output is not supported yet"%(material.name)))
                 if len(outputNode.inputs['Volume'].links):
-                    self.report({'WARNING'}, ("Material '%s': volume output is not supported yet"(material.name)))
+                    self.report({'WARNING'}, ("Material '%s': volume output is not supported yet"%(material.name)))
                 set_internal_material_from_node_dictionary(bpy.data.textures, bpy.data.images, material, workDictionary)
                 material.use_nodes = False
             except Exception as e:
@@ -552,7 +583,7 @@ def convert_materials_to_blender_internal(self):
     # Check if the world (aka background) is set
     try:
         if bpy.context.scene.world.use_nodes:
-			# Clear all texture slots to avoid conflicts
+            # Clear all texture slots to avoid conflicts
             for texKey in bpy.context.scene.world.texture_slots.keys():
                 bpy.context.scene.world.texture_slots.clear(bpy.context.scene.world.texture_slots.find(texKey))
             worldOutNode = find_world_output_node(bpy.context.scene.world.node_tree)
