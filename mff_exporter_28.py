@@ -21,7 +21,7 @@ bl_info = {
     "description": "Exporter for the custom Mufflon file format",
     "author": "Marvin, Johannes Jendersie, Florian Bethe",
     "version": (1, 1),
-    "blender": (2, 69, 0),
+    "blender": (2, 80, 0),
     "location": "File > Export > Mufflon (.json/.mff)",
     "category": "Import-Export"
 }
@@ -58,14 +58,16 @@ def bake_texture_node(node, material, outputName, isScalar):
     bakeHeight = 1024
     
     # Remember what object to select later
-    prevActiveObject = bpy.context.scene.objects.active
+    prevActiveObject = bpy.context.view_layer.objects.active
     # Add a temporary plane
-    bpy.ops.object.select_all(action='DESELECT')
+    if bpy.ops.object.select_all.poll():
+        bpy.ops.object.select_all(action='DESELECT')
     planeMesh = bpy.data.meshes.new("TemporaryPlane")
     plane = bpy.data.objects.new("TemporaryPlaneObj", planeMesh)
-    bpy.context.scene.objects.link(plane)
-    bpy.context.scene.objects.active = plane
-    plane.select = True
+    bpy.context.scene.collection.objects.link(plane)
+    bpy.context.view_layer.update()
+    bpy.context.view_layer.objects.active = plane
+    plane.select_set(True)
     planeMesh = bpy.context.object.data
     bm = bmesh.new()
     v0 = bm.verts.new((-1, -1, 0))
@@ -114,8 +116,7 @@ def bake_texture_node(node, material, outputName, isScalar):
     # Bake the stuff
     fileName = material.name + "_" + node.name + ".png"
     filePath = "//baked_textures//" + fileName
-    bakeImage = bpy.data.images.new("TempBakeImage", width=bakeWidth, height=bakeHeight)
-    bakeImage.use_alpha = True
+    bakeImage = bpy.data.images.new("TempBakeImage", width=bakeWidth, height=bakeHeight, alpha=True)
     bakeImage.alpha_mode = 'STRAIGHT'
     bakeImage.filepath = filePath
     bakeImage.file_format = 'PNG'
@@ -137,14 +138,17 @@ def bake_texture_node(node, material, outputName, isScalar):
     # Cleanup image and material
     bpy.data.images.remove(bakeImage)
     # Cleanup temporary plane
-    bpy.ops.object.select_all(action='DESELECT')
-    plane.select = True
-    bpy.ops.object.delete()
+    bpy.context.scene.collection.objects.unlink(plane)
+    #bpy.ops.object.select_all(action='DESELECT')
+    #plane.select_set(True)
+    #bpy.ops.object.delete(use_global=True, confirm=False)
     planeMesh.user_clear()
     bpy.data.meshes.remove(planeMesh)
     
     # Restore object selection
-    bpy.context.scene.objects.active = prevActiveObject
+    bpy.context.view_layer.objects.active = prevActiveObject
+    bpy.context.view_layer.update()
+    
     return "baked_textures/" + fileName
     
 def property_array_to_color(prop_array):
@@ -216,7 +220,6 @@ def write_diffuse_node(self, material, node):
             dict['roughness'] = get_scalar_def_only_input(node, 'Roughness')
     else:
         raise Exception("non-value for diffuse roughness (node '%s')"%(node.name))
-    
     return dict
     
 def write_torrance_node(self, material, node):
@@ -367,221 +370,6 @@ def write_mix_node(self, material, node, hasAlphaAlready):
         raise Exception("invalid mix-shader factor input (node '%s')"%(node.name))
         
     return dict
-    
-def add_texture_and_texture_slot(material, textures, images, textureSuffix, texturePath):
-    # Add texture
-    textureName = material.name + " " + textureSuffix
-    texIndex = textures.find(textureName)
-    if texIndex < 0:
-        texture = textures.new(textureName, 'IMAGE')
-        texture.image = images.load(texturePath, True)
-        texIndex = textures.find(textureName)
-
-    # Add slot
-    slot = material.texture_slots.add()
-    slot.use_map_color_diffuse = False
-    slot.texture = textures[texIndex]
-    return slot
-
-def set_internal_diffuse_material_from_node_dictionary(textures, images, material, dict):
-    if isinstance(dict['albedo'], str):
-        slot = add_texture_and_texture_slot(material, textures, images, "diffuse albedo", dict['albedo'])
-        slot.use_map_color_diffuse = True
-        slot.diffuse_color_factor = 1.0
-    else:
-        material.diffuse_color = dict['albedo']
-    
-    if 'roughness' not in dict or dict['roughness'] == 0.0:
-        material.diffuse_shader = 'LAMBERT'
-    else:
-        material.diffuse_shader = 'OREN_NAYAR'
-        material.roughness = dict['roughness']
-    material.diffuse_intensity = 1.0
-
-def set_internal_emissive_material_from_node_dictionary(textures, images, material, dict):
-    if isinstance(dict['radiance'], str):
-        slot = add_texture_and_texture_slot(material, textures, images, "emissive radiance", dict['radiance'])
-        slot.use_map_emit = True
-        slot.emit_factor = dict['scale']
-    else:
-        material.diffuse_color = dict['radiance']
-        material.emit = dict['scale']
-
-def set_internal_torrance_material_from_node_dictionary(textures, images, material, dict):
-    if isinstance(dict['albedo'], str):
-        slot = add_texture_and_texture_slot(material, textures, images, "specular albedo", dict['albedo'])
-        slot.use_map_color_spec = True
-        slot.specular_color_factor = 1.0
-    else:
-        material.specular_color = dict['albedo']
-    if isinstance(dict['roughness'], str):
-        slot = add_texture_and_texture_slot(material, textures, images, "specular roughness", dict['roughness'])
-        slot.use_map_hardness = True
-        slot.hardness_factor = 1.0
-    else:
-        if isinstance(dict['roughness'], float):
-            material.specular_hardness = 511 * (1 - pow(dict['roughness'], 1.0/3.0))
-        else:
-            # TODO: warn about lost anisotropy?
-            material.specular_hardness = 511 * (1 - pow(dict['roughness'][0], 1.0/3.0))
-    
-    material.specular_shader = 'COOKTORR'
-    material['ndf'] = dict['ndf']
-
-def set_internal_walter_material_from_node_dictionary(textures, images, material, dict):
-    material.use_transparency = True
-    material.transparency_method = 'RAYTRACE'
-    material.alpha = 0.0
-    if isinstance(dict['roughness'], str):
-        slot = add_texture_and_texture_slot(material, textures, images, "refractive roughness", dict['roughness'])
-        slot.use_map_hardness = True
-        slot.hardness_factor = 1.0
-    else:
-        material.raytrace_transparency.gloss_factor = 1.0 - dict['roughness']
-    material.raytrace_transparency.ior = dict['ior']
-    material['ndf'] = dict['ndf']
-    
-def set_internal_nonrecursive_material_from_node_dictionary(textures, images, material, dict):
-    if dict['type'] == 'lambert' or dict['type'] == 'orennayar':
-        set_internal_diffuse_material_from_node_dictionary(textures, images, material, dict)
-    elif dict['type'] == 'emissive':
-        set_internal_emissive_material_from_node_dictionary(textures, images, material, dict)
-    elif dict['type'] == 'torrance':
-        set_internal_torrance_material_from_node_dictionary(textures, images, material, dict)
-    elif dict['type'] == 'walter':
-        set_internal_walter_material_from_node_dictionary(textures, images, material, dict)
-    elif dict['type'] == 'microfacet':
-        set_internal_walter_material_from_node_dictionary(textures, images, material, dict)
-        material.specular_intensity = 1.0
-        material.specular_color = material.diffuse_color
-        material.specular_hardness = 511 * (1.0 - pow(material.raytrace_transparency.gloss_factor, 1.0/3.0))
-        material.raytrace_transparency.fresnel = 1.0
-    else:
-        raise Exception("has invalid non-recursive material type '%s'"%(dict['type']))
-        
-    # Setup alpha
-    if "alpha" in dict:
-        slot = add_texture_and_texture_slot(material, textures, images, "alpha", dict['alpha'])
-        slot.use_map_alpha = True
-        slot.alpha_factor = 1.0
-    
-
-def set_internal_material_from_node_dictionary(textures, images, material, dict):
-    # Clear all texture slots to avoid conflicts
-    for texKey in material.texture_slots.keys():
-        material.texture_slots.clear(material.texture_slots.find(texKey))
-        
-    # Clear all blending
-    material.diffuse_intensity = 0.0
-    material.specular_intensity = 0.0
-    material.emit = 0.0
-    material.ambient = 0.0
-    material.translucency = 0.0
-    material.use_diffuse_ramp = 0.0
-    material.use_specular_ramp = 0.0
-    material.use_shadeless = 0.0
-    material.use_tangent_shading = 0.0
-    material.use_cubic = 0.0
-    material.raytrace_mirror.use = False
-    material.subsurface_scattering.use = False
-
-    if dict['type'] == 'blend':
-        set_internal_nonrecursive_material_from_node_dictionary(textures, images, material, dict['layerA'])
-        set_internal_nonrecursive_material_from_node_dictionary(textures, images, material, dict['layerB'])
-        if dict['layerA']['type'] == 'lambert' or dict['layerA']['type'] == 'orennayar':
-            material.diffuse_intensity = dict['factorA']
-        elif dict['layerA']['type'] == 'torrance':
-            material.specular_intensity = dict['factorA']
-        if dict['layerB']['type'] == 'lambert' or dict['layerB']['type'] == 'orennayar':
-            material.diffuse_intensity = dict['factorB']
-        elif dict['layerB']['type'] == 'torrance':
-            material.specular_intensity = dict['factorB']
-    elif dict['type'] == 'fresnel':
-        set_internal_nonrecursive_material_from_node_dictionary(textures, images, material, dict['layerRefraction'])
-        set_internal_nonrecursive_material_from_node_dictionary(textures, images, material, dict['layerReflection'])
-        if dict['layerRefraction']['type'] == 'walter':
-            material.raytrace_transparency.fresnel = 1.0
-        else:
-            material.diffuse_shader = 'FRESNEL'
-            if isinstance(dict['ior'], float):
-                material.diffuse_fresnel = dict['ior']
-                material.diffuse_fresnel_factor = 0.0
-            else:
-                material.diffuse_fresnel = dict['ior'][0]
-                material.diffuse_fresnel_factor = dict['ior'][1]
-    else:
-        set_internal_nonrecursive_material_from_node_dictionary(textures, images, material, dict)
-
-def convert_materials_to_blender_internal(self):
-    print("Converting node materials...")
-    # Switch to cycles for baking
-    oldEngine = bpy.context.scene.render.engine
-    bpy.context.scene.render.engine = 'CYCLES'
-    
-    convertedAllMaterials = True
-    for material in bpy.data.materials:
-        if material.use_nodes:
-            # First get the node that actually determines the material properties
-            outputNode = find_material_output_node(material.node_tree)
-            if outputNode is None:
-                print("Skipping material '%s' (no output node)..."%(material.name))
-                continue
-            # Then handle surface properties: check the connections backwards
-            if len(outputNode.inputs['Surface'].links) == 0:
-                print("Skipping material '%s' (no connection to surface output)..."%(material.name))
-                continue
-            
-            # Casing: mix shader vs single input
-            firstNode = outputNode.inputs['Surface'].links[0].from_node
-            try:
-                if firstNode.bl_idname == 'ShaderNodeMixShader':
-                    workDictionary = write_mix_node(self, material, firstNode, False)
-                else:
-                    workDictionary = write_nonrecursive_node(self, material, firstNode)
-                # TODO: displacement
-                if len(outputNode.inputs['Displacement'].links):
-                    self.report({'WARNING'}, ("Material '%s': displacement output is not supported yet"(material.name)))
-                if len(outputNode.inputs['Volume'].links):
-                    self.report({'WARNING'}, ("Material '%s': volume output is not supported yet"(material.name)))
-                set_internal_material_from_node_dictionary(bpy.data.textures, bpy.data.images, material, workDictionary)
-                material.use_nodes = False
-            except Exception as e:
-                self.report({'ERROR'}, ("Material '%s' not converted: %s"%(material.name, str(e))))
-                convertedAllMaterials = False
-    
-    # Check if the world (aka background) is set
-    try:
-        if bpy.context.scene.world.use_nodes:
-			# Clear all texture slots to avoid conflicts
-            for texKey in bpy.context.scene.world.texture_slots.keys():
-                bpy.context.scene.world.texture_slots.clear(bpy.context.scene.world.texture_slots.find(texKey))
-            worldOutNode = find_world_output_node(bpy.context.scene.world.node_tree)
-            if not worldOutNode is None:
-                if len(worldOutNode.inputs['Surface'].links) > 0:
-                    colorNode = worldOutNode.inputs['Surface'].links[0].from_node
-                    if colorNode.bl_idname != 'ShaderNodeTexImage':
-                        raise Exception("background lights other than envmaps are not supported yet (node '%s')"%(colorNode.name))
-                    if len(colorNode.inputs['Vector'].links) > 0:
-                        if colorNode.inputs['Vector'].links[0].from_node.bl_idname != 'ShaderNodeTexCoord' or colorNode.inputs['Vector'].links[0].from_socket.bl_idname != 'NodeSocketVector':
-                            self.report({'WARNING'}, ("Background: vector input (for e.g. rotation) is not supported yet (node '%s')"%(colorNode.name)))
-                    # Create the texture and add it to a world slot
-                    texturePath = colorNode.image.filepath
-                    textureName = "Envmap"
-                    texIndex = bpy.data.textures.find(textureName)
-                    if texIndex < 0:
-                        texture = bpy.data.textures.new(textureName, 'IMAGE')
-                        texture.image = bpy.data.images.load(texturePath, True)
-                        texIndex = bpy.data.textures.find(textureName)
-                    # Add slot
-                    slot = bpy.context.scene.world.texture_slots.add()
-                    slot.texture = bpy.data.textures[texIndex]
-    except Exception as e:
-        self.report({'ERROR'}, ("Background light did not get set: %s"%(str(e))))
-        convertedAllMaterials = False
-    
-    bpy.context.scene.render.engine = oldEngine
-    return convertedAllMaterials
-
 
 
 class CustomJSONEncoder(json.JSONEncoder):
@@ -592,7 +380,7 @@ class CustomJSONEncoder(json.JSONEncoder):
             return format(o, '.3g') # keep 3 most significant digits
         elif isinstance(o, Mapping):
             return "{{{}\n{}}}".format(','.join('\n{}"{}" : {}'.format(indent, str(ok), self.iterencode(ov, _one_shot, level+1))
-                                             for ok, ov in o.items()), ' ' * ((level-1) * self.indent))
+                                       for ok, ov in o.items()), ' ' * ((level-1) * self.indent))
         elif isinstance(o, Sequence) and not isinstance(o, str):
             # Do not line break short arrays
             sep = ', ' if len(o) <= 4 else (',\n    '+indent)
@@ -626,122 +414,15 @@ def write_num(binary, offset, size, num):
     binary[offset : offset+size] = num.to_bytes(size, byteorder='little')
 
 
-def write_lambert_material(workDictionary, textureMap, material, applyFactor):
-    for key in materialKeys: # Delete all material keys which might exist due to a change of the material
-        workDictionary.pop(key, None)
-    workDictionary['type'] = "lambert"
-    if 'diffuse' in textureMap:
-        workDictionary['albedo'] = make_path_relative_to_root(material.texture_slots[textureMap['diffuse']].texture.image.filepath)
-    else:
-        scale = material.diffuse_intensity if applyFactor else 1.0
-        workDictionary['albedo'] = [
-            material.diffuse_color.r * scale,
-            material.diffuse_color.g * scale,
-            material.diffuse_color.b * scale]
-
-def write_orennayar_material(workDictionary, textureMap, material, applyFactor):
-    for key in materialKeys: # Delete all material keys which might exist due to a change of the material
-        workDictionary.pop(key, None)
-    workDictionary['type'] = "orennayar"
-    if 'diffuse' in textureMap:
-        workDictionary['albedo'] = make_path_relative_to_root(material.texture_slots[textureMap['diffuse']].texture.image.filepath)
-    else:
-        scale = material.diffuse_intensity if applyFactor else 1.0
-        workDictionary['albedo'] = [
-            material.diffuse_color.r * scale,
-            material.diffuse_color.g * scale,
-            material.diffuse_color.b * scale]
-    workDictionary['roughness'] = material.roughness
-
-def write_torrance_material(workDictionary, textureMap, material, applyFactor, self):
-    for key in materialKeys: # Delete all material keys which might exist due to a change of the material
-        workDictionary.pop(key, None)
-    workDictionary['type'] = "torrance"
-    if 'specular' in textureMap:
-        workDictionary['albedo'] = make_path_relative_to_root(material.texture_slots[textureMap['specular']].texture.image.filepath)
-    else:
-        scale = material.specular_intensity if applyFactor else 1.0
-        workDictionary['albedo'] = [material.specular_color.r * scale,
-                                    material.specular_color.g * scale,
-                                    material.specular_color.b * scale]
-    if 'roughness' in textureMap:
-        workDictionary['roughness'] = make_path_relative_to_root(material.texture_slots[textureMap['roughness']].texture.image.filepath)
-    else:
-        if material.specular_shader == "COOKTORR" or material.specular_shader == "PHONG" or material.specular_shader == "BLINN":
-            workDictionary['roughness'] = math.pow(1 - material.specular_hardness / 511, 3)  # Max hardness = 511
-        else:
-            self.report({'WARNING'}, ("Unsupported specular material: \"%s\". Exporting as Torrance material with roughness 0.1." % (material.name)))
-            workDictionary['roughness'] = 0.1  # We have no roughness parameter so we default to 0.1
-    if "ndf" in material:
-        workDictionary['ndf'] = material["ndf"]
-    else:
-        workDictionary['ndf'] = "GGX"  # Default normal distribution function
-
-def write_walter_material(workDictionary, textureMap, material):
-    for key in materialKeys: # Delete all material keys which might exist due to a change of the material
-        workDictionary.pop(key, None)
-    workDictionary['type'] = "walter"
-    if 'roughness' in textureMap:
-        workDictionary['roughness'] = make_path_relative_to_root(material.texture_slots[textureMap['roughness']].texture.image.filepath)
-    else:
-        workDictionary['roughness'] = math.pow(1 - material.specular_hardness / 511, 3)  # Max hardness = 511
-    if "ndf" in material:
-        workDictionary['ndf'] = material["ndf"]
-    else:
-        workDictionary['ndf'] = "GGX"  # Default normal distribution function
-    absorptionFactor = 1 / math.pow(1-material.alpha, 2.0) - 1
-    workDictionary['absorption'] = [material.diffuse_color.r*absorptionFactor, material.diffuse_color.g*absorptionFactor, material.diffuse_color.b*absorptionFactor]
-    workDictionary['ior'] = material.raytrace_transparency.ior
-
-def write_fresnel_material(workDictionary, textureMap, material):
-    for key in materialKeys: # Delete all material keys which might exist due to a change of the material
-        workDictionary.pop(key, None)
-    workDictionary['type'] = "fresnel"
-    workDictionary['ior'] = [material.diffuse_fresnel, material.diffuse_fresnel_factor]
-    workDictionary['layerRefraction'] = collections.OrderedDict()
-    workDictionary['layerReflection'] = collections.OrderedDict()
-    
-def write_microfacet_material(workDictionary, textureMap, material):
-    workDictionary['type'] = "microfacet"
-    workDictionary['ior'] = material.raytrace_transparency.ior
-    if 'roughness' in textureMap:
-        workDictionary['roughness'] = make_path_relative_to_root(material.texture_slots[textureMap['roughness']].texture.image.filepath)
-    else:
-        workDictionary['roughness'] = math.pow(1 - material.specular_hardness / 511, 3)  # Max hardness = 511
-    if "ndf" in material:
-        workDictionary['ndf'] = material["ndf"]
-    else:
-        workDictionary['ndf'] = "GGX"  # Default normal distribution function
-    absorptionFactor = 1 / math.pow(1-material.alpha, 2.0) - 1
-    workDictionary['absorption'] = [material.diffuse_color.r*absorptionFactor, material.diffuse_color.g*absorptionFactor, material.diffuse_color.b*absorptionFactor]
-
-def write_blend_material(workDictionary, textureMap, material, factorA, factorB):
-    for key in materialKeys: # Delete all material keys which might exist due to a change of the material
-        workDictionary.pop(key, None)
-    workDictionary['type'] = "blend"
-    workDictionary['factorA'] = factorA
-    workDictionary['factorB'] = factorB
-    workDictionary['layerA'] = collections.OrderedDict()
-    workDictionary['layerB'] = collections.OrderedDict()
-
-def write_emissive_material(workDictionary, textureMap, material):
-    for key in materialKeys: # Delete all material keys which might exist due to a change of the material
-        workDictionary.pop(key, None)
-    workDictionary['type'] = "emissive"
-    if 'emissive' in textureMap:
-        workDictionary['radiance'] = make_path_relative_to_root(material.texture_slots[textureMap['emissive']].texture.image.filepath)
-    else:
-        workDictionary['radiance'] = [material.diffuse_color.r, material.diffuse_color.g, material.diffuse_color.b]
-    workDictionary['scale'] = [material.emit, material.emit, material.emit]
-
-
 
 # If the object has LoDs there are two options:
 # It is a LoD (mesh only) OR an instance of a LoD-chain.
 def is_lod_mesh(obj):
     # By definition a lod instance may not have any real data (but must be of type mesh).
     # I.e. it has no geometry == no dimension.
-    return len(obj.lod_levels) != 0 and (obj.dimensions[0] != 0.0 or obj.dimensions[1] != 0.0 or obj.dimensions[2] != 0.0)
+    # TODO: LoD levels!
+    return False
+    #return len(obj.lod_levels) != 0 and (obj.dimensions[0] != 0.0 or obj.dimensions[1] != 0.0 or obj.dimensions[2] != 0.0)
 
 # Check, if an object is an exportable instance.
 def is_instance(obj):
@@ -883,10 +564,10 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
         if camera.users == 0:
             continue
         if camera.type == "PERSP":
-            aperture = camera.gpu_dof.fstop
+            aperture = camera.dof.aperture_fstop if camera.dof.use_dof else 128.0
             if cameraObject.name not in dataDictionary['cameras']:
                 dataDictionary['cameras'][cameraObject.name] = collections.OrderedDict()
-            if aperture == 128.0:
+            if aperture >= 128.0:
                 cameraType = "pinhole"
                 dataDictionary['cameras'][cameraObject.name]['type'] = cameraType
                 # FOV might be horizontal or vertically, see https://blender.stackexchange.com/a/38571
@@ -922,8 +603,8 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
             scn.frame_set(f)
             trans, rot, scale = cameraObject.matrix_world.decompose()
             cameraPath.append(flip_space(cameraObject.location))
-            viewDirectionPath.append(flip_space(rot * Vector((0.0, 0.0, -1.0))))
-            upPath.append(flip_space(rot * Vector((0.0, 1.0, 0.0))))
+            viewDirectionPath.append(flip_space(rot @ Vector((0.0, 0.0, -1.0))))
+            upPath.append(flip_space(rot @ Vector((0.0, 1.0, 0.0))))
         dataDictionary['cameras'][cameraObject.name]['path'] = junction_path(cameraPath)
         dataDictionary['cameras'][cameraObject.name]['viewDir'] = junction_path(viewDirectionPath)
         dataDictionary['cameras'][cameraObject.name]['up'] = junction_path(upPath)
@@ -935,7 +616,7 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
     # Lights
     lightNames = []
 
-    lamps = [o for o in bpy.data.objects if o.type == 'LAMP']
+    lamps = [o for o in bpy.data.objects if o.type == 'LIGHT']
     for i in range(len(lamps)):
         lampObject = lamps[i]
         lamp = lampObject.data
@@ -944,40 +625,20 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
         if lamp.type == "POINT":
             if lampObject.name not in dataDictionary['lights']:
                 dataDictionary['lights'][lampObject.name] = collections.OrderedDict()
-            if lamp.active_texture is not None:
-                lampTextureSlot = lamp.texture_slots[lamp.active_texture_index]
-                if lampTextureSlot.texture.type != "IMAGE":
-                    self.report({'WARNING'}, ("Skipping goniometric lamp: \"%s\" because Texture: \"%s\" is not an image." % (lampObject.name, lampTextureSlot.texture.name)))
-                else:
-                    if lampTextureSlot.texture.image is None:
-                        self.report({'WARNING'}, ("Skipping goniometric lamp: \"%s\" because Texture: \"%s\" has no image." % (lampObject.name, lampTextureSlot.texture.name)))
-                    else:
-                        positions = []
-                        scales = []
-                        # Go through all frames, accumulate the to-be-exported quantities
-                        for f in frame_range:
-                            scn.frame_set(f)
-                            positions.append(flip_space(lampObject.location))
-                            scales.append(lamp.energy)
-                        dataDictionary['lights'][lampObject.name]['type'] = "goniometric"
-                        dataDictionary['lights'][lampObject.name]['position'] = junction_path(positions)
-                        finalPath = make_path_relative_to_root(lampTextureSlot.texture.image.filepath)
-                        dataDictionary['lights'][lampObject.name]['map'] = finalPath
-                        dataDictionary['lights'][lampObject.name]['scale'] = junction_path(scales)
-            else:
-                positions = []
-                intensities = []
-                scales = []
-                # Go through all frames, accumulate the to-be-exported quantities
-                for f in frame_range:
-                    scn.frame_set(f)
-                    positions.append(flip_space(lampObject.location))
-                    intensities.append([lamp.color.r, lamp.color.g, lamp.color.b])
-                    scales.append(lamp.energy)
-                dataDictionary['lights'][lampObject.name]['type'] = "point"
-                dataDictionary['lights'][lampObject.name]['position'] = junction_path(positions)
-                dataDictionary['lights'][lampObject.name]['intensity'] = junction_path(intensities)
-                dataDictionary['lights'][lampObject.name]['scale'] = junction_path(scales)
+            # TODO: this needs nodes too for goniometric lights!
+            positions = []
+            intensities = []
+            scales = []
+            # Go through all frames, accumulate the to-be-exported quantities
+            for f in frame_range:
+                scn.frame_set(f)
+                positions.append(flip_space(lampObject.location))
+                intensities.append([lamp.color.r, lamp.color.g, lamp.color.b])
+                scales.append(lamp.energy)
+            dataDictionary['lights'][lampObject.name]['type'] = "point"
+            dataDictionary['lights'][lampObject.name]['position'] = junction_path(positions)
+            dataDictionary['lights'][lampObject.name]['intensity'] = junction_path(intensities)
+            dataDictionary['lights'][lampObject.name]['scale'] = junction_path(scales)
         elif lamp.type == "SUN":
             if lampObject.name not in dataDictionary['lights']:
                 dataDictionary['lights'][lampObject.name] = collections.OrderedDict()
@@ -1029,24 +690,8 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
 
     for scene in bpy.data.scenes:
         world = scene.world
-        worldTextureSlot = world.texture_slots[world.active_texture_index]
-        if worldTextureSlot is not None:
-            if worldTextureSlot.texture is not None:
-                if worldTextureSlot.texture.type != "IMAGE":
-                    self.report({'WARNING'}, ("Skipping environment map: \"%s\" because it is not an image." % worldTextureSlot.texture.name))
-                else:
-                    if worldTextureSlot.texture.image is None:
-                        self.report({'WARNING'}, ("Skipping environment map: \"%s\" because it has no image." % worldTextureSlot.texture.name))
-                    else:
-                        if worldTextureSlot.texture.name not in lightNames:
-                            lightNames.append(worldTextureSlot.texture.name)
-                            dataDictionary['lights'][worldTextureSlot.texture.name] = collections.OrderedDict()
-                            finalPath = make_path_relative_to_root(worldTextureSlot.texture.image.filepath)
-                            lightType = "envmap"
-                            dataDictionary['lights'][worldTextureSlot.texture.name]["type"] = lightType
-                            dataDictionary['lights'][worldTextureSlot.texture.name]["map"] = finalPath
-                            dataDictionary['lights'][worldTextureSlot.texture.name]["scale"] = worldTextureSlot.horizon_factor
-
+        # TODO: Envmaps how in 2.8?
+    
     # Make a dict with all instances, cameras, ...
     if use_selection:
         objects = [obj for obj in bpy.context.selected_objects if obj.users > 0]
@@ -1071,138 +716,54 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
             continue
         if material.name not in dataDictionary['materials']:
             dataDictionary['materials'][material.name] = collections.OrderedDict()
-        workDictionary = dataDictionary['materials'][material.name]
-        # Create texture map which has "property name" -> texture instead of polling, if a texture
-        # is used for diffuse...
-        textureMap = {}
-        for j in range(len( material.texture_slots)):
-            if not material.use_textures[j]:
-                continue
-            textureSlot = material.texture_slots[j]
-            if textureSlot is None:
-                continue
-            if textureSlot.texture.type != "IMAGE":
-                self.report({'WARNING'}, (
-                            "Skipping image texture \"%s\" from material: \"%s\" because it is not an image." % (textureSlot.texture.name, material.name)))
-                continue
-            if textureSlot.texture.image is None:
-                self.report({'WARNING'}, ("Skipping image texture \"%s\" from material: \"%s\" because it has no image." % (textureSlot.texture.name, material.name)))
-                continue
-            if textureSlot.use_map_color_diffuse:
-                if 'diffuse' in textureMap:
-                    self.report({'WARNING'}, ("Too many diffuse textures: \"%s\",\"%s\" from material: \"%s\"." % (material.texture_slots[textureMap['diffuse']].name, textureSlot.name, material.name)))
-                else:
-                    textureMap['diffuse'] = j
-            if textureSlot.use_map_color_spec:
-                if 'specular' in textureMap:
-                    self.report({'WARNING'}, ("Too many specular textures: \"%s\",\"%s\" from material: \"%s\"." % (material.texture_slots[textureMap['specular']].name, textureSlot.name, material.name)))
-                else:
-                    textureMap['specular'] = j
-            if textureSlot.use_map_emit:
-                if 'emissive' in textureMap:
-                    self.report({'WARNING'}, ("Too many emissive textures: \"%s\",\"%s\" from material: \"%s\"." % (material.texture_slots[textureMap['emissive']].name, textureSlot.name, material.name)))
-                else:
-                    textureMap['emissive'] = j
-            if textureSlot.use_map_hardness:
-                if 'roughness' in textureMap:
-                    self.report({'WARNING'}, ("Too many roughness textures: \"%s\",\"%s\" from material: \"%s\"." % (material.texture_slots[textureMap['roughness']].name, textureSlot.name, material.name)))
-                else:
-                    textureMap['roughness'] = j
-            if textureSlot.use_map_alpha:
-                if 'alpha' in textureMap:
-                    self.report({'WARNING'}, ("Too many alpha textures: \"%s\",\"%s\" from material: \"%s\"." % (material.texture_slots[textureMap['alpha']].name, textureSlot.name, material.name)))
-                else:
-                    textureMap['alpha'] = j
-            if textureSlot.use_map_displacement:
-                if 'displacement' in textureMap:
-                    self.report({'WARNING'}, ("Too many displacement textures: \"%s\",\"%s\" from material: \"%s\"." % (material.texture_slots[textureMap['displacement']].name, textureSlot.name, material.name)))
-                else:
-                    textureMap['displacement'] = j
 
-        # Check for Multi-Layer material
-        hasRefraction = material.use_transparency and (material.alpha < 1)
-        hasReflection = material.specular_intensity > 0
-        hasDiffuse = material.diffuse_intensity > 0 and (material.diffuse_color.r > 0
-                                                      or material.diffuse_color.g > 0
-                                                      or material.diffuse_color.b > 0)
-        hasEmission = material.emit > 0
-        useFresnel = (material.diffuse_shader == "FRESNEL") or (material.raytrace_transparency.fresnel > 0)  # TODO: more options to enable fresnel?
-        applyDiffuseScale = True  # Conditional replaced later if intensity is used as a blend factor
         
-        # Keep the top level around to add alpha after every material cleans itself
-        topLevelDict = workDictionary
-
-        # Check which combination is given and export the appropriate material
-        if hasEmission: 
-            # Always blend emission additive
-            if hasDiffuse:
-                write_blend_material(workDictionary, textureMap, material, 1.0, 1.0)
-                write_emissive_material(workDictionary['layerA'], textureMap, material)
-                workDictionary = workDictionary['layerB']
-            else: # No blending (emission is the only layer)
-                if hasReflection or hasRefraction:
-                    self.report({'WARNING'}, ("Unsupported emission material: \"%s\". Exporting as simple emissive material." % (material.name)))
-                write_emissive_material(workDictionary, textureMap, material)
-        if hasReflection and not hasEmission:
-            # Blend with fresnel or constant value
-            if hasRefraction:
-                if useFresnel:
-                    # Use efficient microfacet model
-                    write_microfacet_material(workDictionary, textureMap, material)
-                else:
-                    # Blend from torrance-walter
-                    factorB = 1-material.specular_intensity if hasRefraction else material.diffuse_intensity
-                    applyDiffuseScale = False # in both cases: if Refr+Diffuse the diffuse_intensity will also be used as blend factor.
-                    write_blend_material(workDictionary, textureMap, material, material.specular_intensity, factorB)
-                    write_torrance_material(workDictionary['layerA'], textureMap, material, False, self)
-                    workDictionary = workDictionary['layerB']
-            elif hasDiffuse:
-                if useFresnel:
-                    write_fresnel_material(workDictionary, textureMap, material)
-                    write_torrance_material(workDictionary['layerReflection'], textureMap, material, True, self)
-                    workDictionary = workDictionary['layerRefraction']
-                else:
-                    factorB = 1-material.specular_intensity if hasRefraction else material.diffuse_intensity
-                    applyDiffuseScale = False # in both cases: if Refr+Diffuse the diffuse_intensity will also be used as blend factor.
-                    write_blend_material(workDictionary, textureMap, material, material.specular_intensity, factorB)
-                    write_torrance_material(workDictionary['layerA'], textureMap, material, False, self)
-                    workDictionary = workDictionary['layerB']
-            else: # No further layers/blending
-                if useFresnel:  # Use a second empty layer in fresnel
-                    write_fresnel_material(workDictionary, textureMap, material)
-                    write_torrance_material(workDictionary['layerReflection'], textureMap, material, True, self)
-                    workDictionary['layerRefraction']['type'] = "lambert"
-                    workDictionary['layerRefraction']['albedo'] = [0,0,0]
-                else:
-                    write_torrance_material(workDictionary, textureMap, material, True, self)
-
-        if hasRefraction and not hasEmission:
-            if hasDiffuse: # one last blending necessary
-                write_blend_material(workDictionary, textureMap, material, 1-material.diffuse_intensity, material.diffuse_intensity)
-                write_walter_material(workDictionary['layerA'], textureMap, material)
-                workDictionary = workDictionary['layerB']
-                applyDiffuseScale = False
-            elif not (hasReflection and useFresnel):
-                write_walter_material(workDictionary, textureMap, material)
-
-        if hasDiffuse:
-            if material.diffuse_shader == "OREN_NAYAR":
-                write_orennayar_material(workDictionary, textureMap, material, applyDiffuseScale)
+        # First get the node that actually determines the material properties
+        outputNode = find_material_output_node(material.node_tree)
+        if outputNode is None:
+            print("Skipping material '%s' (no output node)..."%(material.name))
+            continue
+        # Then handle surface properties: check the connections backwards
+        if len(outputNode.inputs['Surface'].links) == 0:
+            print("Skipping material '%s' (no connection to surface output)..."%(material.name))
+            continue
+        firstNode = outputNode.inputs['Surface'].links[0].from_node
+        try:
+            if firstNode.bl_idname == 'ShaderNodeMixShader':
+                workDictionary = write_mix_node(self, material, firstNode, False)
             else:
-                if not (material.diffuse_shader == "LAMBERT" or material.diffuse_shader == "FRESNEL"):
-                    self.report({'WARNING'}, ("Unsupported diffuse material: \"%s\". Exporting as Lambert material." % (material.name)))
-                write_lambert_material(workDictionary, textureMap, material, applyDiffuseScale)
-        
-        # Alpha textures are forbidden for area lights
-        if not hasEmission and 'alpha' in textureMap:
-            topLevelDict['alpha'] = make_path_relative_to_root(material.texture_slots[textureMap['alpha']].texture.image.filepath)
+                workDictionary = write_nonrecursive_node(self, material, firstNode)
+            # TODO: displacement
+            if len(outputNode.inputs['Displacement'].links):
+                self.report({'WARNING'}, ("Material '%s': displacement output is not supported yet"(material.name)))
+            if len(outputNode.inputs['Volume'].links):
+                self.report({'WARNING'}, ("Material '%s': volume output is not supported yet"(material.name)))
+            # TODO: join the material dicts together
+            dataDictionary['materials'][material.name] = workDictionary
+        except Exception as e:
+            self.report({'ERROR'}, ("Material '%s' not converted: %s"%(material.name, str(e))))
             
-        if 'displacement' in textureMap:
-            topLevelDict['displacement'] = collections.OrderedDict()
-            topLevelDict['displacement']['map'] = make_path_relative_to_root(material.texture_slots[textureMap['displacement']].texture.image.filepath)
-            if material.texture_slots[textureMap['displacement']].displacement_factor != 1:
-                topLevelDict['displacement']['scale'] = material.texture_slots[textureMap['displacement']].displacement_factor
-            
+    # Background
+    # Check if the world (aka background) is set
+    try:
+        if context.scene.world.use_nodes:
+            worldOutNode = find_world_output_node(context.scene.world.node_tree)
+            if not worldOutNode is None:
+                if len(worldOutNode.inputs['Surface'].links) > 0:
+                    colorNode = worldOutNode.inputs['Surface'].links[0].from_node
+                    if colorNode.bl_idname != 'ShaderNodeTexImage':
+                        raise Exception("background lights other than envmaps are not supported yet (node '%s')"%(colorNode.name))
+                    if len(colorNode.inputs['Vector'].links) > 0:
+                        if colorNode.inputs['Vector'].links[0].from_node.bl_idname != 'ShaderNodeTexCoord' or colorNode.inputs['Vector'].links[0].from_socket.bl_idname != 'NodeSocketVector':
+                            self.report({'WARNING'}, ("Background: vector input (for e.g. rotation) is not supported yet (node '%s')"%(colorNode.name)))
+                    backgroundName = context.scene.name + "_Envmap"
+                    dataDictionary['lights'][backgroundName] = collections.OrderedDict()
+                    dataDictionary['lights'][backgroundName]['type'] = 'envmap'
+                    dataDictionary['lights'][backgroundName]['map'] = colorNode.image.filepath
+                    dataDictionary['lights'][backgroundName]['scale'] = 1.0
+                    lightNames.append(backgroundName)
+    except Exception as e:
+        self.report({'ERROR'}, ("Background light did not get set: %s"%(str(e))))
 
     # Scenarios
     for scene in bpy.data.scenes:
@@ -1227,11 +788,7 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
             if sceneObject.name in lightNames:
                 sceneLightNames.append(sceneObject.name)
 
-        worldTextureSlot = world.texture_slots[world.active_texture_index]
-        if worldTextureSlot is not None:
-            if worldTextureSlot.texture is not None:
-                if worldTextureSlot.texture.name in lightNames:
-                    sceneLightNames.append(worldTextureSlot.texture.name)
+        # TODO: Envmaps
 
         dataDictionary['scenarios'][scene.name]['lights'] = sceneLightNames
         dataDictionary['scenarios'][scene.name]['lod'] = 0
@@ -1252,7 +809,7 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
 
         # Mask instance objects which are not part of this scene (hidden/not part)
         for obj in objects:
-            if is_instance(obj) and (scene not in obj.users_scene or obj.hide):
+            if is_instance(obj) and (scene not in obj.users_scene or obj.hide_render):
                 if obj.name not in dataDictionary['scenarios'][scene.name]['instanceProperties']:
                     dataDictionary['scenarios'][scene.name]['instanceProperties'][obj.name] = collections.OrderedDict()
                 dataDictionary['scenarios'][scene.name]['instanceProperties'][obj.name]['mask'] = True
@@ -1378,7 +935,7 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
         binary.extend((0).to_bytes(8, byteorder='little'))  # has to be corrected when the value is known
 
     print("Exporting objects...")
-    activeObject = scn.objects.active   # Keep this for resetting later
+    activeObject = context.view_layer.objects.active    # Keep this for resetting later
     exportedObjects = OrderedDict()
     for objIdx in range(0, len(instances) + len(animationObjects)):
         isAnimatedObject = objIdx >= len(instances)
@@ -1414,22 +971,7 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
         # Calculate Lod chain to get bounding box over all Lods
         lodLevels = []
         lodChainStart = 0
-        if len(currentObject.lod_levels) != 0:  # if it has Lod levels check depth of Lod levels
-            lodObject = currentObject.lod_levels[1].object
-            maxDistance = -1
-            while lodObject not in lodLevels:
-                lodLevels.append(lodObject)
-                if len(lodObject.lod_levels) == 0:
-                    lodLevels = []
-                    lodChainStart = 0
-                    self.report({'WARNING'}, (
-                                "Skipped LOD levels from: \"%s\" because LOD Object: \"%s\" has no successor." % (
-                        currentObject.name, lodObject.name)))
-                    break
-                if maxDistance < lodObject.lod_levels[1].distance:
-                    maxDistance = lodObject.lod_levels[1].distance  # the last LOD level has the highest distance
-                    lodChainStart = len(lodLevels) - 1
-                lodObject = lodObject.lod_levels[1].object
+        # TODO: LoD chain
         if len(lodLevels) == 0:
             lodLevels.append(currentObject)  # if no LOD levels the object itself ist the only LOD level
 
@@ -1469,14 +1011,14 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
             # Needs to set the target object to active, to be able to apply changes.
             if len(lodObject.users_scene) < 1:
                 continue
-            bpy.context.screen.scene = lodObject.users_scene[0] # Choose a valid scene which contains the object
-            hidden = lodObject.hide
-            lodObject.hide = False
-            bpy.context.scene.objects.active = lodObject
+            context.window.scene = lodObject.users_scene[0] # Choose a valid scene which contains the object
+            hidden = lodObject.hide_render
+            lodObject.hide_render = False
+            context.view_layer.objects.active = lodObject
             mode = lodObject.mode
             bpy.ops.object.mode_set(mode='EDIT')
             if "sphere" not in lodObject:
-                mesh = lodObject.to_mesh(scn, True, calc_tessface=False, settings='RENDER')  # applies all modifiers
+                mesh = lodObject.to_mesh(preserve_all_data_layers=True)  # applies all modifiers
                 bm = bmesh.new()
                 bm.from_mesh(mesh)  # bmesh gives a local editable mesh copy
                 faces = bm.faces
@@ -1485,27 +1027,13 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
                 for k in range(len(faces)):
                     if len(faces[k].edges) > 4 or (triangulate and len(faces[k].edges) > 3):
                         facesToTriangulate.append(faces[k])
-                bmesh.ops.triangulate(bm, faces=facesToTriangulate[:], quad_method=0, ngon_method=0)
+                bmesh.ops.triangulate(bm, faces=facesToTriangulate[:], quad_method='BEAUTY', ngon_method='BEAUTY')
                 # Split vertices if vertex has multiple uv coordinates (is used in multiple triangles)
                 # or if it is not smooth
                 if len(lodObject.data.uv_layers) > 0:
-                    # Query the layer the object is on
-                    layer = -1
-                    for i in range(0, len(lodObject.layers)):
-                        if lodObject.layers[i]:
-                            layer = i
-                            break
-                    if layer == -1:
-                        self.report({'WARNING'}, ("LoD object \"%s\" to create seams for does not exist on any layer." % (lodObject.name)))
-                    currLayerState = bpy.context.scene.layers[layer]
-                    currContextType = bpy.context.area.type
-                    bpy.context.scene.layers[layer] = True
-                    bpy.context.area.type = 'VIEW_3D'
-                    bpy.ops.object.mode_set(mode='EDIT')
                     # mark seams from uv islands
-                    bpy.ops.uv.seams_from_islands()
-                    bpy.context.scene.layers[layer] = currLayerState
-                    bpy.context.area.type = currContextType
+                    if bpy.ops.uv.seams_from_islands.poll():
+                        bpy.ops.uv.seams_from_islands()
                 edgesToSplit = [e for e in bm.edges if e.seam or not e.smooth
                     or not all(f.smooth for f in e.link_faces)]
                 bmesh.ops.split_edges(bm, edges=edgesToSplit)
@@ -1696,12 +1224,14 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
                     if len(mesh.materials) != 0:
                         for polygon in mesh.polygons:
                             if len(mesh.materials) != 0:
-                                if mesh.materials[polygon.material_index].emit > 0.0:
-                                    objectFlags |= 1
-                                    objectFlagsBin = objectFlags.to_bytes(4, byteorder='little')
-                                    for k in range(4):
-                                        binary[objectFlagsBinaryPosition + k] = objectFlagsBin[k]
-                                    break
+                                # Check if the material emits light
+                                for node in mesh.materials[polygon.material_index].node_tree.nodes:
+                                    if node.bl_idname == 'ShaderNodeEmission' and (len(node.inputs['Strength'].links) > 0 or (node.inputs['Strength'].default_value > 0.0)):
+                                        objectFlags |= 1
+                                        objectFlagsBin = objectFlags.to_bytes(4, byteorder='little')
+                                        for k in range(4):
+                                            binary[objectFlagsBinaryPosition + k] = objectFlagsBin[k]
+                                        break
                 else:
                     if materials[0] > 0.0:  # first material is default when the object has no mats
                         objectFlags |= 1
@@ -1716,8 +1246,7 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
                 binary.extend(matIDOutData)
                 # Face Attributes
                 # TODO Face Attributes (with deflation)
-
-                bpy.data.meshes.remove(mesh)
+                lodObject.to_mesh_clear()
             else:
                 # Spheres
                 sphereDataArray = bytearray()
@@ -1747,9 +1276,9 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
                 binary.extend(sphereOutData)
             # reset used mode
             bpy.ops.object.mode_set(mode=mode)
-            lodObject.hide = hidden
+            lodObject.hide_render = hidden
     #reset active object
-    scn.objects.active = activeObject
+    context.view_layer.objects.active = activeObject
 
     # Instances
     write_num(binary, instanceSectionStartBinaryPosition, 8, len(binary))
@@ -1810,7 +1339,7 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
         binary[numberOfInstancesBinaryPosition + i] = numberOfInstancesBytes[i]
 
     # Reset scene
-    bpy.context.screen.scene = scn
+    context.window.scene = scn
     # Write binary to file
     binFile = open(filepath, 'bw')
     binFile.write(binary)
@@ -1906,19 +1435,9 @@ class MufflonExporter(Operator, ExportHelper):
             description="Exports instance transformations per animation frame",
             default=False,
             )
-    convert_materials = BoolProperty(
-            name="Convert node materials",
-            description="Converts node-baed materials into internal (and exportable) material representation prior to export",
-            default=False,
-            )
     path_mode = path_reference_mode
 
     def execute(self, context):
-        if self.convert_materials:
-            if not convert_materials_to_blender_internal(self):
-                print("Failed converting materials")
-                print("Stopped exporting")
-                return {'CANCELLED'}
         return export_mufflon(context, self, self.filepath, self.use_selection,
                               self.use_deflation, self.use_compression,
                               self.overwrite_default_scenario, self.triangulate,
@@ -1932,12 +1451,12 @@ def menu_func_export(self, context):
 
 def register():
     bpy.utils.register_class(MufflonExporter)
-    bpy.types.INFO_MT_file_export.append(menu_func_export)
+    bpy.types.TOPBAR_MT_file_export.append(menu_func_export)
 
 
 def unregister():
     bpy.utils.unregister_class(MufflonExporter)
-    bpy.types.INFO_MT_file_export.remove(menu_func_export)
+    bpy.types.TOPBAR_MT_file_export.remove(menu_func_export)
 
 
 if __name__ == "__main__":
