@@ -284,8 +284,12 @@ def write_nonrecursive_node(self, material, node):
         
 def write_glass_node(self, material, node):
     dict = collections.OrderedDict()
-    dict = write_walter_node(self, material, node)
-    dict['type'] = 'microfacet'
+    # First check if the color has texture input, in which case we can't use the full microfacet model
+    if len(node.inputs['Color'].links) > 0:
+        raise Exception("glass cannot have non-value color since absorption must not be a texture (node '%s')"%(node.name))
+    else:
+        dict = write_walter_node(self, material, node)
+        dict['type'] = 'microfacet'
     return dict
     
 def write_mix_node(self, material, node, hasAlphaAlready):
@@ -336,22 +340,29 @@ def write_mix_node(self, material, node, hasAlphaAlready):
             self.report({'WARNING'}, ("Material '%s': Non-zero normal input is currently ignored"%(material.name)))
         
         # Check if we have a full microfacet model
-        if (nodeA.bl_idname == 'ShaderNodeBsdfGlossy' or nodeA.bl_idname == 'ShaderNodeBsdfAnisotropic') and (nodeB.bl_idname == 'ShaderNodeBsdfGlass' or nodeB.bl_idname == 'ShaderNodeBsdfRefraction'):
-            dict = write_walter_node(self, material, nodeB)
-            dict['type'] = 'microfacet'
-            # Warn about disagreements in roughness/absorption/ndf
-            tempDict = write_torrance_node(self, material, nodeA)
-            if dict['roughness'] != tempDict['roughness']:
-                self.report({'WARNING'}, ("Material '%s': fresnel layers disagree about roughness; using refractive layer's value (node '%s')"%(material.name, node.name)))
-            if dict['ndf'] != tempDict['ndf']:
-                self.report({'WARNING'}, ("Material '%s': fresnel layers disagree about ndf; using refractive layer's value (node '%s')"%(material.name, node.name)))
-            if dict['absorption'] != tempDict['albedo']:
-                self.report({'WARNING'}, ("Material '%s': fresnel layers disagree about absorption; using refractive layer's value (node '%s')"%(material.name, node.name)))
-            if dict['shadowingModel'] != tempDict['shadowingModel']:
-                self.report({'WARNING'}, ("Material '%s': fresnel layers disagree about shadowing model; using refractive layer's value (node '%s')"%(material.name, node.name)))
-            if dict['ior'] != fresnelIor:
-                self.report({'WARNING'}, ("Material '%s': refractive layer disagrees with fresnel node about the IOR; using fresnel node's value (node '%s')"%(material.name, node.name)))
-                dict['ior'] = fresnelIor
+        if (nodeA.bl_idname == 'ShaderNodeBsdfGlossy' or nodeA.bl_idname == 'ShaderNodeBsdfAnisotropic') and nodeB.bl_idname == 'ShaderNodeBsdfRefraction':
+            # Check if the albedo is texturized (which doesn't work with the full microfacet model)
+            if len(nodeA.inputs['Color'].links) > 0:
+                dict['type'] = 'fresnel'
+                dict['ior'] = get_scalar_def_only_input(node.inputs['Fac'].links[0].from_node, 'IOR')
+                dict['layerRefraction'] = write_nonrecursive_node(self, material, nodeA)
+                dict['layerReflection'] = write_nonrecursive_node(self, material, nodeB)
+            else:
+                dict = write_walter_node(self, material, nodeB)
+                dict['type'] = 'microfacet'
+                # Warn about disagreements in roughness/absorption/ndf
+                tempDict = write_torrance_node(self, material, nodeA)
+                if dict['roughness'] != tempDict['roughness']:
+                    self.report({'WARNING'}, ("Material '%s': microfacet layers disagree about roughness; using refractive layer's value (node '%s')"%(material.name, node.name)))
+                if dict['ndf'] != tempDict['ndf']:
+                    self.report({'WARNING'}, ("Material '%s': microfacet layers disagree about ndf; using refractive layer's value (node '%s')"%(material.name, node.name)))
+                if dict['absorption'] != tempDict['albedo']:
+                    self.report({'WARNING'}, ("Material '%s': microfacet layers disagree about absorption; using refractive layer's value (node '%s')"%(material.name, node.name)))
+                if dict['shadowingModel'] != tempDict['shadowingModel']:
+                    self.report({'WARNING'}, ("Material '%s': microfacet layers disagree about shadowing model; using refractive layer's value (node '%s')"%(material.name, node.name)))
+                if dict['ior'] != fresnelIor:
+                    self.report({'WARNING'}, ("Material '%s': refractive layer disagrees with fresnel node about the IOR; using fresnel node's value (node '%s')"%(material.name, node.name)))
+                    dict['ior'] = fresnelIor
         else:
             dict['type'] = 'fresnel'
             dict['ior'] = get_scalar_def_only_input(node.inputs['Fac'].links[0].from_node, 'IOR')
@@ -777,11 +788,10 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
             if not worldOutNode is None:
                 if len(worldOutNode.inputs['Surface'].links) > 0:
                     colorNode = worldOutNode.inputs['Surface'].links[0].from_node
-                    if colorNode.bl_idname != 'ShaderNodeTexImage':
+                    if colorNode.bl_idname != 'ShaderNodeTexEnvironment':
                         raise Exception("background lights other than envmaps are not supported yet (node '%s')"%(colorNode.name))
                     if len(colorNode.inputs['Vector'].links) > 0:
-                        if colorNode.inputs['Vector'].links[0].from_node.bl_idname != 'ShaderNodeTexCoord' or colorNode.inputs['Vector'].links[0].from_socket.bl_idname != 'NodeSocketVector':
-                            self.report({'WARNING'}, ("Background: vector input (for e.g. rotation) is not supported yet (node '%s')"%(colorNode.name)))
+                        self.report({'WARNING'}, ("Background: vector input (for e.g. rotation) is not supported yet (node '%s')"%(colorNode.name)))
                     backgroundName = context.scene.name + "_Envmap"
                     dataDictionary['lights'][backgroundName] = collections.OrderedDict()
                     dataDictionary['lights'][backgroundName]['type'] = 'envmap'
