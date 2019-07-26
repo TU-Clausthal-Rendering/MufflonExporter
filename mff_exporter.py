@@ -601,6 +601,17 @@ def convert_materials_to_blender_internal(self):
             if not worldOutNode is None:
                 if len(worldOutNode.inputs['Surface'].links) > 0:
                     colorNode = worldOutNode.inputs['Surface'].links[0].from_node
+                    strength = 1.0
+                    # Two valid options: direct connection from env texture or a beckground node inbetween
+                    if colorNode.bl_idname == 'ShaderNodeBackground':
+                        if len(colorNode.inputs['Color'].links) == 0:
+                            raise Exception("background currently cannot be monochromatic (node '%s'"%(colorNode.name))
+                        else:
+                            if len(colorNode.inputs['Strength'].links) > 0:
+                                self.report({'WARNING'}, ("Background: non-scalar (linked) strength input for background is ignored (node '%s')"%(material.name, colorNode.name)))
+                            else:
+                                strength = colorNode.inputs['Strength'].default_value
+                            colorNode = colorNode.inputs['Color'].links[0].from_node
                     if colorNode.bl_idname != 'ShaderNodeTexEnvironment':
                         raise Exception("background lights other than envmaps are not supported yet (node '%s')"%(colorNode.name))
                     if len(colorNode.inputs['Vector'].links) > 0:
@@ -616,6 +627,7 @@ def convert_materials_to_blender_internal(self):
                     # Add slot
                     slot = bpy.context.scene.world.texture_slots.add()
                     slot.texture = bpy.data.textures[texIndex]
+                    slot.horizon_factor = strength
     except Exception as e:
         self.report({'ERROR'}, ("Background light did not get set: %s"%(str(e))))
         convertedAllMaterials = False
