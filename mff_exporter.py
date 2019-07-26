@@ -164,7 +164,7 @@ def get_color_input(material, node, inputName):
         return property_array_to_color(input.default_value)
     else:
         return get_image_input(material, node, input.links[0].from_node, inputName, False)
-        
+     
 def get_scalar_input(material, node, inputName):
     input = node.inputs[inputName]
     if len(input.links) == 0:
@@ -265,6 +265,28 @@ def write_walter_node(self, material, node):
     dict['ior'] = get_scalar_def_only_input(node, 'IOR')
     return dict
     
+def write_principled_node(self, material, node):
+    dict = collections.OrderedDict()
+    dict['type'] = 'disney'
+    dict['baseColor'] = get_color_input(material, node, 'Color')
+    dict['scatterDistance'] = get_scalar_def_only_input(material, node, 'Subsurface Radius') * get_scalar_def_only_input(material, node, "Subsurface")
+    dict['metallic'] = get_scalar_def_only_input(material, node, 'Metallic')
+    dict['roughness'] = get_scalar_def_only_input(material, node, 'Roughness')
+    dict['anisotropic'] = get_scalar_def_only_input(material, node, 'Anisotropic')
+    dict['specTrans'] = get_scalar_def_only_input(material, node, 'Transmission')
+    dict['ior'] = get_scalar_def_only_input(material, node, 'IOR')
+    dict['specularTint'] = get_scalar_def_only_input(material, node, 'Specular Tint')
+    dict['sheen'] = get_scalar_def_only_input(material, node, 'Sheen')
+    dict['sheenTint'] = get_scalar_def_only_input(material, node, 'Sheen Tint')
+    dict['clearcoat'] = get_scalar_def_only_input(material, node, 'Clearcoat')
+    dict['clearcoatRoughness'] = get_scalar_def_only_input(material, node, 'Clearcoat Roughness')
+    if len(node.inputs['Anisotropic Rotation'].links) > 0 or node.inputs['Anisotropic Rotation'].default_value != 0.0:
+        self.report({'WARNING'}, ("Material '%s': Non-zero anisotropic rotation is currently ignored"%(material.name)))
+    if len(node.inputs['Normal'].links) > 0:
+        self.report({'WARNING'}, ("Material '%s': Non-zero normal input is currently ignored"%(material.name)))
+    # TODO: warn about other ignored inputs (subsurface method, distribution, transmission roughness)
+    return dict
+    
 def write_nonrecursive_node(self, material, node):
     # TODO: support for principled BSDF?
     if node.bl_idname == 'ShaderNodeBsdfDiffuse':
@@ -275,6 +297,8 @@ def write_nonrecursive_node(self, material, node):
         return write_walter_node(self, material, node)
     elif node.bl_idname == 'ShaderNodeEmission':
         return write_emissive_node(self, material, node)
+    elif node.bl_idname == 'ShaderNodeBsdfPrincipled':
+        return write_principled_node(self, material, node)
     else:
         # TODO: allow recursion? Currently not supported by our renderer
         raise Exception("invalid mix-shader input (node '%s')"%(node.name))
@@ -592,6 +616,7 @@ def convert_materials_to_blender_internal(self):
                 convertedAllMaterials = False
     
     # Check if the world (aka background) is set
+    # TODO: different backgrounds for different scenes
     try:
         if bpy.context.scene.world.use_nodes:
             # Clear all texture slots to avoid conflicts
@@ -602,7 +627,7 @@ def convert_materials_to_blender_internal(self):
                 if len(worldOutNode.inputs['Surface'].links) > 0:
                     colorNode = worldOutNode.inputs['Surface'].links[0].from_node
                     strength = 1.0
-                    # Two valid options: direct connection from env texture or a beckground node inbetween
+                    # Two valid options: direct connection from env texture or a background node inbetween
                     if colorNode.bl_idname == 'ShaderNodeBackground':
                         if len(colorNode.inputs['Color'].links) == 0:
                             raise Exception("background currently cannot be monochromatic (node '%s'"%(colorNode.name))

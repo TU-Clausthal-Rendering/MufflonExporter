@@ -268,6 +268,32 @@ def write_walter_node(self, material, node):
     dict['ior'] = get_scalar_def_only_input(node, 'IOR')
     return dict
     
+def write_principled_node(self, material, node):
+    dict = collections.OrderedDict()
+    dict['type'] = 'disney'
+    dict['baseColor'] = get_color_input(material, node, 'Base Color')
+    scatterDist = property_array_to_color(get_scalar_def_only_input(node, 'Subsurface Radius'))
+    scatterFact = get_scalar_def_only_input(node, "Subsurface")
+    dict['scatterDistance'] = [scatterDist[0] * scatterFact, scatterDist[1] * scatterFact, scatterDist[2] * scatterFact]
+    dict['metallic'] = get_scalar_def_only_input(node, 'Metallic')
+    dict['roughness'] = get_scalar_def_only_input(node, 'Roughness')
+    dict['anisotropic'] = get_scalar_def_only_input(node, 'Anisotropic')
+    dict['specTrans'] = get_scalar_def_only_input(node, 'Transmission')
+    dict['ior'] = get_scalar_def_only_input(node, 'IOR')
+    dict['specularTint'] = get_scalar_def_only_input(node, 'Specular Tint')
+    dict['sheen'] = get_scalar_def_only_input(node, 'Sheen')
+    dict['sheenTint'] = get_scalar_def_only_input(node, 'Sheen Tint')
+    dict['clearcoat'] = get_scalar_def_only_input(node, 'Clearcoat')
+    dict['clearcoatRoughness'] = get_scalar_def_only_input(node, 'Clearcoat Roughness')
+    if len(node.inputs['Anisotropic Rotation'].links) > 0 or node.inputs['Anisotropic Rotation'].default_value != 0.0:
+        self.report({'WARNING'}, ("Material '%s': Non-zero anisotropic rotation is currently ignored"%(material.name)))
+    if node.inputs['Subsurface Color'].default_value != dict['baseColor']:
+        self.report({'WARNING'}, ("Material '%s': subsurface color differring from base color is currently ignored"%(material.name)))
+    if len(node.inputs['Normal'].links) > 0:
+        self.report({'WARNING'}, ("Material '%s': Non-zero normal input is currently ignored"%(material.name)))
+    # TODO: warn about other ignored inputs (clearcoat normal, tangent, emission, alpha, subsurface method, distribution, transmission roughness)
+    return dict
+    
 def write_nonrecursive_node(self, material, node):
     # TODO: support for principled BSDF?
     if node.bl_idname == 'ShaderNodeBsdfDiffuse':
@@ -278,6 +304,8 @@ def write_nonrecursive_node(self, material, node):
         return write_walter_node(self, material, node)
     elif node.bl_idname == 'ShaderNodeEmission':
         return write_emissive_node(self, material, node)
+    elif node.bl_idname == 'ShaderNodeBsdfPrincipled':
+        return write_principled_node(self, material, node)
     else:
         # TODO: allow recursion? Currently not supported by our renderer
         raise Exception("invalid mix-shader input (node '%s')"%(node.name))
@@ -522,7 +550,7 @@ def validate_transformation(self, instance):
             self.report({'WARNING'}, ("Perfect sphere object \"%s\" has a rotation which will be ignored." % (instance.name)))
         if instance.scale[0] != instance.scale[1] or instance.scale[0] != instance.scale[2]:
             self.report({'WARNING'}, ("Perfect sphere object \"%s\" has a non-uniform scaling which will be ignored (using x-scale as uniform scale)." % (instance.name)))
-        return mathutils.Matrix.Translation(instance.location) * mathutils.Matrix.Scale(instance.scale[0], 4)
+        return mathutils.Matrix.Translation(instance.location) @ mathutils.Matrix.Scale(instance.scale[0], 4)
     else:
         return instance.matrix_world
         
@@ -683,7 +711,7 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
             # Go through all frames, accumulate the to-be-exported quantities
             for f in frame_range:
                 scn.frame_set(f)
-                directions.append(flip_space(lampObject.matrix_world.to_quaternion() * Vector((0.0, 0.0, -1.0))))
+                directions.append(flip_space(lampObject.matrix_world.to_quaternion() @ Vector((0.0, 0.0, -1.0))))
                 radiances.append([lamp.color.r, lamp.color.g, lamp.color.b])
                 scales.append(lamp.energy)
             dataDictionary['lights'][lampObject.name]['type'] = "directional"
@@ -780,37 +808,6 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
         except Exception as e:
             self.report({'ERROR'}, ("Material '%s' not converted: %s"%(material.name, str(e))))
             
-    # Background
-    # Check if the world (aka background) is set
-    try:
-        if context.scene.world.use_nodes:
-            worldOutNode = find_world_output_node(context.scene.world.node_tree)
-            if not worldOutNode is None:
-                if len(worldOutNode.inputs['Surface'].links) > 0:
-                    colorNode = worldOutNode.inputs['Surface'].links[0].from_node
-                    strength = 1.0
-                    # Two valid options: direct connection from env texture or a beckground node inbetween
-                    if colorNode.bl_idname == 'ShaderNodeBackground':
-                        if len(colorNode.inputs['Color'].links) == 0:
-                            raise Exception("background currently cannot be monochromatic (node '%s'"%(colorNode.name))
-                        else:
-                            if len(colorNode.inputs['Strength'].links) > 0:
-                                self.report({'WARNING'}, ("Background: non-scalar (linked) strength input for background is ignored (node '%s')"%(material.name, colorNode.name)))
-                            else:
-                                strength = colorNode.inputs['Strength'].default_value
-                            colorNode = colorNode.inputs['Color'].links[0].from_node
-                    if colorNode.bl_idname != 'ShaderNodeTexEnvironment':
-                        raise Exception("background lights other than envmaps are not supported yet (node '%s')"%(colorNode.name))
-                    if len(colorNode.inputs['Vector'].links) > 0:
-                        self.report({'WARNING'}, ("Background: vector input (for e.g. rotation) is not supported yet (node '%s')"%(colorNode.name)))
-                    backgroundName = context.scene.name + "_Envmap"
-                    dataDictionary['lights'][backgroundName] = collections.OrderedDict()
-                    dataDictionary['lights'][backgroundName]['type'] = 'envmap'
-                    dataDictionary['lights'][backgroundName]['map'] = colorNode.image.filepath
-                    dataDictionary['lights'][backgroundName]['scale'] = strength
-                    lightNames.append(backgroundName)
-    except Exception as e:
-        self.report({'ERROR'}, ("Background light did not get set: %s"%(str(e))))
 
     # Scenarios
     for scene in bpy.data.scenes:
@@ -834,8 +831,39 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
         for sceneObject in scene.objects:
             if sceneObject.name in lightNames:
                 sceneLightNames.append(sceneObject.name)
-
-        # TODO: Envmaps
+                    
+        # Background
+        # Check if the world (aka background) is set
+        try:
+            if world.use_nodes:
+                worldOutNode = find_world_output_node(world.node_tree)
+                if not worldOutNode is None:
+                    if len(worldOutNode.inputs['Surface'].links) > 0:
+                        colorNode = worldOutNode.inputs['Surface'].links[0].from_node
+                        strength = 1.0
+                        # Two valid options: direct connection from env texture or a background node inbetween
+                        if colorNode.bl_idname == 'ShaderNodeBackground':
+                            if len(colorNode.inputs['Color'].links) == 0:
+                                raise Exception("background currently cannot be monochromatic (node '%s'"%(colorNode.name))
+                            else:
+                                if len(colorNode.inputs['Strength'].links) > 0:
+                                    self.report({'WARNING'}, ("Background: non-scalar (linked) strength input for background is ignored (node '%s')"%(material.name, colorNode.name)))
+                                else:
+                                    strength = colorNode.inputs['Strength'].default_value
+                                colorNode = colorNode.inputs['Color'].links[0].from_node
+                        if colorNode.bl_idname != 'ShaderNodeTexEnvironment':
+                            raise Exception("background lights other than envmaps are not supported yet (node '%s')"%(colorNode.name))
+                        if len(colorNode.inputs['Vector'].links) > 0:
+                            self.report({'WARNING'}, ("Background: vector input (for e.g. rotation) is not supported yet (node '%s')"%(colorNode.name)))
+                        backgroundName = scene.name + "_Envmap"
+                        dataDictionary['lights'][backgroundName] = collections.OrderedDict()
+                        dataDictionary['lights'][backgroundName]['type'] = 'envmap'
+                        dataDictionary['lights'][backgroundName]['map'] = make_path_relative_to_root(colorNode.image.filepath)
+                        dataDictionary['lights'][backgroundName]['scale'] = strength
+                        lightNames.append(backgroundName)
+                        sceneLightNames.append(backgroundName)
+        except Exception as e:
+            self.report({'ERROR'}, ("Background light did not get set: %s"%(str(e))))
 
         dataDictionary['scenarios'][scene.name]['lights'] = sceneLightNames
         dataDictionary['scenarios'][scene.name]['lod'] = 0
@@ -1307,7 +1335,7 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
                 if lodObject.active_material is not None:
                     sphereDataArray.extend(materialLookup[lodObject.active_material.name].to_bytes(2, byteorder='little'))
                     if (objectFlags & 1) == 0:
-                        if lodObject.active_material.emit > 0.0:
+                        if 'Emission' in lodObject.active_material.node_tree.nodes:
                             objectFlags |= 1
                             write_num(binary, objectFlagsBinaryPosition, 4, objectFlags)
                 else:
