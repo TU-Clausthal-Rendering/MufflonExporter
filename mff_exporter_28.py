@@ -50,7 +50,14 @@ def find_world_output_node(tree):
     return None
     
 
-def bake_texture_node(node, material, outputName, isScalar):
+def bake_texture_node(node, material, outputName, isScalar, bakeTextures):
+    fileName = material.name + "_" + node.name + ".png"
+    filePath = "//baked_textures//" + fileName
+
+    # If we don't want to (re-)bake textures just return the file path so it can be written or baked later
+    if not bakeTextures:
+        return filePath
+
     print("Baking node '%s' of material '%s'"%(node.name, material.name))
     # TODO: how to allow resolutions other than 1024x1024
     # TODO: don't bake textures multiple times
@@ -114,8 +121,6 @@ def bake_texture_node(node, material, outputName, isScalar):
         os.makedirs(imageFolder)
         
     # Bake the stuff
-    fileName = material.name + "_" + node.name + ".png"
-    filePath = "//baked_textures//" + fileName
     bakeImage = bpy.data.images.new("TempBakeImage", width=bakeWidth, height=bakeHeight, alpha=True)
     bakeImage.alpha_mode = 'STRAIGHT'
     bakeImage.filepath = filePath
@@ -154,28 +159,28 @@ def bake_texture_node(node, material, outputName, isScalar):
 def property_array_to_color(prop_array):
     return [ prop_array[0], prop_array[1], prop_array[2] ]
 
-def get_image_input(material, to_node, from_node, targetInputName, isScalar):
+def get_image_input(material, to_node, from_node, targetInputName, isScalar, bakeTextures):
     if from_node.bl_idname == 'ShaderNodeTexImage':
         return from_node.image.filepath
     else:
         # Find out what socket we take things from
         fromSocketName = to_node.inputs[targetInputName].links[0].from_socket.name
-        return bake_texture_node(from_node, material, fromSocketName, isScalar)
+        return bake_texture_node(from_node, material, fromSocketName, isScalar, bakeTextures)
 
-def get_color_input(material, node, inputName):
+def get_color_input(material, node, inputName, bakeTextures):
     input = node.inputs[inputName]
     if len(input.links) == 0:
         return property_array_to_color(input.default_value)
     else:
-        return get_image_input(material, node, input.links[0].from_node, inputName, False)
+        return get_image_input(material, node, input.links[0].from_node, inputName, False, bakeTextures)
         
-def get_scalar_input(material, node, inputName):
+def get_scalar_input(material, node, inputName, bakeTextures):
     input = node.inputs[inputName]
     if len(input.links) == 0:
         return input.default_value
     else:
         # TODO: support for converters!
-        return get_image_input(material, node, input.links[0].from_node, inputName, True)
+        return get_image_input(material, node, input.links[0].from_node, inputName, True, bakeTextures)
 
 def get_scalar_def_only_input(node, inputName):
     input = node.inputs[inputName]
@@ -200,7 +205,7 @@ def get_microfacet_distribution(self, materialName, node):
 def write_emissive_node(self, material, node):
     dict = collections.OrderedDict()
     dict['type'] = 'emissive'
-    dict['radiance'] = get_color_input(material, node, 'Color')
+    dict['radiance'] = get_color_input(material, node, 'Color', self.bake_textures)
     scale = get_scalar_def_only_input(node, 'Strength')
     dict['scale'] = [ scale, scale, scale ]
     return dict
@@ -210,7 +215,7 @@ def write_diffuse_node(self, material, node):
 
     if len(node.inputs['Roughness'].links) == 0:
         # Differentiate between Lambert and Oren-Nayar
-        dict['albedo'] = get_color_input(material, node, 'Color')
+        dict['albedo'] = get_color_input(material, node, 'Color', self.bake_textures)
         if node.inputs['Roughness'].default_value == 0.0:
             # Lambert
             dict['type'] = 'lambert'
@@ -225,11 +230,11 @@ def write_diffuse_node(self, material, node):
 def write_torrance_node(self, material, node):
     dict = collections.OrderedDict()
     dict['type'] = 'torrance'
-    dict['albedo'] = get_color_input(material, node, 'Color')
+    dict['albedo'] = get_color_input(material, node, 'Color', self.bake_textures)
     if node.distribution == 'SHARP':
         dict['roughness'] = 0.0
     else:
-        dict['roughness'] = get_scalar_input(material, node, 'Roughness')
+        dict['roughness'] = get_scalar_input(material, node, 'Roughness', self.bake_textures)
     dict['ndf'] = get_microfacet_distribution(self, material.name, node)
     # TODO: shadowing model
     dict['shadowingModel'] = 'vcavity'
@@ -251,7 +256,7 @@ def write_torrance_node(self, material, node):
 def write_walter_node(self, material, node):
     dict = collections.OrderedDict()
     dict['type'] = 'walter'
-    dict['absorption'] = get_color_input(material, node, 'Color')
+    dict['absorption'] = get_color_input(material, node, 'Color', self.bake_textures)
     # Check if the 'color' is a string or none (which means no inverting possible)
     # TODO: write 'color' out instead of absorption (since inverting a texture is difficult/expensive)
     if (dict['absorption'] is not None) and not isinstance(dict['absorption'], str):
@@ -261,7 +266,7 @@ def write_walter_node(self, material, node):
     if node.distribution == 'SHARP':
         dict['roughness'] = 0.0
     else:
-        dict['roughness'] = get_scalar_input(material, node, 'Roughness')
+        dict['roughness'] = get_scalar_input(material, node, 'Roughness', self.bake_textures)
     # TODO: shadowing model
     dict['shadowingModel'] = 'vcavity'
     dict['ndf'] = get_microfacet_distribution(self, material.name, node)
@@ -271,7 +276,7 @@ def write_walter_node(self, material, node):
 def write_principled_node(self, material, node):
     dict = collections.OrderedDict()
     dict['type'] = 'disney'
-    dict['baseColor'] = get_color_input(material, node, 'Base Color')
+    dict['baseColor'] = get_color_input(material, node, 'Base Color', self.bake_textures)
     scatterDist = property_array_to_color(get_scalar_def_only_input(node, 'Subsurface Radius'))
     scatterFact = get_scalar_def_only_input(node, "Subsurface")
     dict['scatterDistance'] = [scatterDist[0] * scatterFact, scatterDist[1] * scatterFact, scatterDist[2] * scatterFact]
@@ -1509,6 +1514,11 @@ class MufflonExporter(Operator, ExportHelper):
             name="Export animation",
             description="Exports instance transformations per animation frame",
             default=False,
+            )
+    bake_textures = BoolProperty(
+            name="Bake procedural textures",
+            description="Bakes procedural textures used as e.g. color inputs and stores them on disk",
+            default=False
             )
     path_mode = path_reference_mode
 
