@@ -192,7 +192,7 @@ def property_array_to_color(prop_array):
 
 def get_image_input(material, to_node, from_node, targetInputName, isScalar, bakeTextures):
     if from_node.bl_idname == 'ShaderNodeTexImage':
-        return from_node.image.filepath
+        return from_node.image.filepath.replace("//", "")
     else:
         # Find out what socket we take things from
         fromSocketName = to_node.inputs[targetInputName].links[0].from_socket.name
