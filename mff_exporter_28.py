@@ -37,8 +37,10 @@ bl_info = {
 # * Toggles the material's use_nodes for successful conversions
 
 
-def find_material_output_node(tree):
-    for node in tree.nodes:
+def find_material_output_node(material):
+    if not (hasattr(material, 'node_tree') or hasattr(material.node_tree, 'nodes')):
+        raise Exception("%s is not a node-based material"%(material.name))
+    for node in material.node_tree.nodes:
         if node.bl_idname == 'ShaderNodeOutputMaterial' and node.is_active_output:
             return node
     return None
@@ -95,7 +97,7 @@ def bake_texture_node(node, material, outputName, isScalar, bakeTextures):
     plane.data.materials.append(material)
     
     # Remember the links of this node and the output node
-    outputNode = find_material_output_node(material.node_tree)
+    outputNode = find_material_output_node(material)
     outNodeLinks = []
     texNodeLinks = []
     for link in material.node_tree.links:
@@ -235,6 +237,8 @@ def write_torrance_node(self, material, node):
         dict['roughness'] = 0.0
     else:
         dict['roughness'] = get_scalar_input(material, node, 'Roughness', self.bake_textures)
+    # To match the output of cycles we square the roughness here!
+    dict['roughness'] *= dict['roughness']
     dict['ndf'] = get_microfacet_distribution(self, material.name, node)
     # TODO: shadowing model
     dict['shadowingModel'] = 'vcavity'
@@ -267,6 +271,8 @@ def write_walter_node(self, material, node):
         dict['roughness'] = 0.0
     else:
         dict['roughness'] = get_scalar_input(material, node, 'Roughness', self.bake_textures)
+    # To match the output of cycles we square the roughness here!
+    dict['roughness'] *= dict['roughness']
     # TODO: shadowing model
     dict['shadowingModel'] = 'vcavity'
     dict['ndf'] = get_microfacet_distribution(self, material.name, node)
@@ -736,7 +742,7 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
             for f in frame_range:
                 scn.frame_set(f)
                 positions.append(flip_space(lampObject.location))
-                directions.append(flip_space(lampObject.matrix_world.to_quaternion() * Vector((0.0, 0.0, -1.0))))
+                directions.append(flip_space(lampObject.matrix_world.to_quaternion() @ Vector((0.0, 0.0, -1.0))))
                 intensities.append([lamp.color.r, lamp.color.g, lamp.color.b])
                 scales.append(lamp.energy)
                 widths.append(lamp.spot_size / 2)
@@ -787,7 +793,7 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
 
         
         # First get the node that actually determines the material properties
-        outputNode = find_material_output_node(material.node_tree)
+        outputNode = find_material_output_node(material)
         if outputNode is None:
             print("Skipping material '%s' (no output node)..."%(material.name))
             continue
