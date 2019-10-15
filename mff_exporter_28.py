@@ -13,6 +13,7 @@ import math
 import zlib
 from collections import OrderedDict
 import re
+from enum import Enum
 from inspect import currentframe, getframeinfo
 from collections.abc import Mapping, Sequence
 
@@ -37,11 +38,39 @@ bl_info = {
 # * Toggles the material's use_nodes for successful conversions
 
 
+# Defines if the emission node has blackbody, gioniometric, or no custom input
+class EmissionType(Enum):
+    BLACKBODY = 1
+    GONIOMETRIC = 2
+    NONE = 3
+
+# Checks what kind of emission an emission node is. Options are current black-body,
+# goniometric (which is every color input that is not black-body), and none (which
+# means we use the 'Color' input directly from the emission node)
+def get_emission_type(emissionNode):
+    # Check for blackbody input node
+    colorInput = emissionNode.inputs['Color']
+    if len(colorInput.links) > 0:
+        colorInputNode = colorInput.links[0].from_node
+        if colorInputNode.bl_idname == 'ShaderNodeBlackbody':
+            return EmissionType.BLACKBODY
+        else: # We simply assume that any other input means goniometric
+            return EmissionType.GONIOMETRIC
+    return EmissionType.NONE
+
 def find_material_output_node(material):
     if not (hasattr(material, 'node_tree') or hasattr(material.node_tree, 'nodes')):
         raise Exception("%s is not a node-based material"%(material.name))
     for node in material.node_tree.nodes:
         if node.bl_idname == 'ShaderNodeOutputMaterial' and node.is_active_output:
+            return node
+    return None
+
+def find_light_output_node(light):
+    if not (hasattr(light, 'node_tree') or hasattr(light.node_tree, 'nodes')):
+        raise Exception("%s is not a node-based light"%(material.name))
+    for node in light.node_tree.nodes:
+        if node.bl_idname == 'ShaderNodeOutputLight' and node.is_active_output:
             return node
     return None
     
@@ -207,7 +236,15 @@ def get_microfacet_distribution(self, materialName, node):
 def write_emissive_node(self, material, node):
     dict = collections.OrderedDict()
     dict['type'] = 'emissive'
-    dict['radiance'] = get_color_input(material, node, 'Color', self.bake_textures)
+    # Check if the color input specifies a color temperature
+    emissionType = get_emission_type(node)
+    if emissionType == EmissionType.BLACKBODY:
+        colorNode = node.inputs['Color'].links[0].from_node
+        dict['temperature'] = get_scalar_def_only_input(colorNode, 'Temperature')
+    elif emissionType == EmissionType.GONIOMETRIC:
+        raise Exception("material '%s' has goniometric emission type, which is not supported!"%(material.name))
+    else:
+        dict['radiance'] = get_color_input(material, node, 'Color', self.bake_textures)
     scale = get_scalar_def_only_input(node, 'Strength')
     dict['scale'] = [ scale, scale, scale ]
     return dict
@@ -445,6 +482,113 @@ def write_mix_node(self, material, node, hasAlphaAlready):
         
     return dict
 
+    
+# Reads the color or temperature of the light source
+def get_light_color_or_temperature(self, light, emissionType, emissionNode):
+    if emissionType == EmissionType.BLACKBODY:
+        if light.color.r != 1.0 or light.color.g != 1.0 or light.color.b != 1.0:
+            self.report({'WARNING'}, ("Black-body light '%s' has a color scale which we cannot export; ignoring it!." % (light.name)))
+        return get_scalar_def_only_input(emissionNode.inputs['Color'].links[0].from_node, 'Temperature')
+    elif isGoniometric:
+        # TODO
+        return 0.0
+    else:
+        color = get_scalar_def_only_input(emissionNode, 'Color')
+        return [light.color.r * color[0], light.color.g * color[1], light.color.b * color[2]]
+    
+def write_point_light(self, light, lampObject, emissionNode, scene, frame_range):
+    emissionType = get_emission_type(emissionNode)
+    if emissionType == EmissionType.GONIOMETRIC:
+        raise Exception("light '%s' is detected to be goniometric (color input other than 'Blackbody'); this is not supported yet!"%(light.name))
+    
+    positions = []
+    fluxes = [] # May also be temperature in case of blackbody
+    scales = []
+    # Go through all frames, accumulate the to-be-exported quantities
+    for f in frame_range:
+        scene.frame_set(f)
+        positions.append(flip_space(lampObject.location))
+        fluxes.append(get_light_color_or_temperature(self, light, emissionType, emissionNode))
+        scales.append(light.energy * get_scalar_def_only_input(emissionNode, 'Strength'))
+        if light.shadow_soft_size != 0.0:
+            self.report({'WARNING'}, ("Point light '%s' has non-zero size, which is not supported!" % (light.name)))
+    dict = collections.OrderedDict()
+    dict['type'] = "point"
+    dict['type'] = "point"
+    dict['position'] = junction_path(positions)
+    if emissionType == EmissionType.BLACKBODY:
+        dict['temperature'] = junction_path(fluxes)
+    else:
+        dict['flux'] = junction_path(fluxes)
+    dict['scale'] = junction_path(scales)
+    return dict
+    
+def write_spot_light(self, light, lampObject, emissionNode, scene, frame_range):
+    emissionType = get_emission_type(emissionNode)
+    if emissionType == EmissionType.GONIOMETRIC:
+        raise Exception("spot light '%s' does not support non-scalar or non-black-body emission!"%(light.name))
+    
+    positions = []
+    directions = []
+    intensities = [] # May also be temperature in case of blackbody
+    scales = []
+    widths = []
+    falloffs = []
+    # Go through all frames, accumulate the to-be-exported quantities
+    for f in frame_range:
+        scene.frame_set(f)
+        positions.append(flip_space(lampObject.location))
+        directions.append(flip_space(lampObject.matrix_world.to_quaternion() @ Vector((0.0, 0.0, -1.0))))
+        intensities.append(get_light_color_or_temperature(self, light, emissionType, emissionNode))
+        widths.append(light.spot_size / 2)
+        # Try to match the inner circle for the falloff (not exact, blender seems buggy):
+        # https://blender.stackexchange.com/questions/39555/how-to-calculate-blend-based-on-spot-size-and-inner-cone-angle
+        falloffs.append(math.atan(math.tan(light.spot_size / 2) * math.sqrt(1-light.spot_blend)))
+        # We have to convert the flux as defined by blender to the peak intensity
+        # To retain the same brightness impression, blender always distributes the flux
+        # on the unit sphere and culls the parts which are not in the spot, leaving
+        # an equal intensity when changing the spot size
+        flux = light.energy * get_scalar_def_only_input(emissionNode, 'Strength')
+        scales.append(flux / (4.0 * math.pi))
+        if light.shadow_soft_size != 0.0:
+            self.report({'WARNING'}, ("Spot light '%s' has non-zero size, which is not supported!" % (light.name)))
+    dict = collections.OrderedDict()
+    dict['type'] = "spot"
+    dict['position'] = junction_path(positions)
+    dict['direction'] = junction_path(directions)
+    if emissionType == EmissionType.BLACKBODY:
+        dict['temperature'] = junction_path(intensities)
+    else:
+        dict['intensity'] = junction_path(intensities)
+    dict['scale'] = junction_path(scales)
+    dict['width'] = junction_path(widths)
+    dict['falloffStart'] = junction_path(falloffs)
+    return dict
+    
+def write_directional_light(self, light, lampObject, emissionNode, scene, frame_range):
+    emissionType = get_emission_type(emissionNode)
+    if emissionType == EmissionType.GONIOMETRIC:
+        raise Exception("directional light '%s' does not support non-scalar or non-black-body emission!"%(light.name))
+    
+    directions = []
+    radiances = [] # May also be temperature in case of blackbody
+    scales = []
+    # Go through all frames, accumulate the to-be-exported quantities
+    for f in frame_range:
+        scene.frame_set(f)
+        directions.append(flip_space(lampObject.matrix_world.to_quaternion() @ Vector((0.0, 0.0, -1.0))))
+        radiances.append(get_light_color_or_temperature(self, light, emissionType, emissionNode))
+        scales.append(light.energy * get_scalar_def_only_input(emissionNode, 'Strength'))
+    dict = collections.OrderedDict()
+    dict['type'] = "directional"
+    dict['direction'] = junction_path(directions)
+    if emissionType == EmissionType.BLACKBODY:
+        dict['temperature'] = junction_path(radiances)
+    else:
+        dict['radiance'] = junction_path(radiances)
+    dict['scale'] = junction_path(scales)
+    return dict
+
 
 class CustomJSONEncoder(json.JSONEncoder):
     # https://stackoverflow.com/questions/50700585/write-json-float-in-scientific-notation
@@ -482,6 +626,7 @@ def junction_path(path):
     if path[1:] == path[:-1]:
         return [path[0]]
     return path
+    
 
 # Overwrite a numeric value within a bytearray
 def write_num(binary, offset, size, num):
@@ -691,71 +836,88 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
     lightNames = []
 
     lamps = [o for o in bpy.data.objects if o.type == 'LIGHT']
-    for i in range(len(lamps)):
-        lampObject = lamps[i]
+    for lampObject in lamps:
         lamp = lampObject.data
         if lamp.users == 0:
             continue
+        if lamp.use_nodes and lamp.node_tree:
+            # Fetch the emission node if the light uses nodes
+            outputNode = find_light_output_node(lamp)
+            if len(outputNode.inputs['Surface'].links) == 0:
+                raise Exception("light '%s' is missing output link"%(light.name))
+            emissionNode = outputNode.inputs['Surface'].links[0].from_node
+            if emissionNode.bl_idname != 'ShaderNodeEmission':
+                raise Exception("light '%s' does not have emission node as last output node (other nodes not yet supported!)"%(lamp.name))
+            
         if lamp.type == "POINT":
             if lampObject.name not in dataDictionary['lights']:
                 dataDictionary['lights'][lampObject.name] = collections.OrderedDict()
-            # TODO: this needs nodes too for goniometric lights!
-            positions = []
-            intensities = []
-            scales = []
-            # Go through all frames, accumulate the to-be-exported quantities
-            for f in frame_range:
-                scn.frame_set(f)
-                positions.append(flip_space(lampObject.location))
-                intensities.append([lamp.color.r, lamp.color.g, lamp.color.b])
-                scales.append(lamp.energy)
-            dataDictionary['lights'][lampObject.name]['type'] = "point"
-            dataDictionary['lights'][lampObject.name]['position'] = junction_path(positions)
-            dataDictionary['lights'][lampObject.name]['intensity'] = junction_path(intensities)
-            dataDictionary['lights'][lampObject.name]['scale'] = junction_path(scales)
+            if lamp.use_nodes and lamp.node_tree:
+                dataDictionary['lights'][lampObject.name].update(write_point_light(self, lamp, lampObject, emissionNode, scn, frame_range))
+            else:
+                # TODO: this needs nodes too for goniometric lights!
+                positions = []
+                intensities = []
+                scales = []
+                # Go through all frames, accumulate the to-be-exported quantities
+                for f in frame_range:
+                    scn.frame_set(f)
+                    positions.append(flip_space(lampObject.location))
+                    intensities.append([lamp.color.r, lamp.color.g, lamp.color.b])
+                    scales.append(lamp.energy)
+                dataDictionary['lights'][lampObject.name]['type'] = "point"
+                dataDictionary['lights'][lampObject.name]['position'] = junction_path(positions)
+                dataDictionary['lights'][lampObject.name]['intensity'] = junction_path(intensities)
+                dataDictionary['lights'][lampObject.name]['scale'] = junction_path(scales)
         elif lamp.type == "SUN":
             if lampObject.name not in dataDictionary['lights']:
                 dataDictionary['lights'][lampObject.name] = collections.OrderedDict()
-            directions = []
-            radiances = []
-            scales = []
-            # Go through all frames, accumulate the to-be-exported quantities
-            for f in frame_range:
-                scn.frame_set(f)
-                directions.append(flip_space(lampObject.matrix_world.to_quaternion() @ Vector((0.0, 0.0, -1.0))))
-                radiances.append([lamp.color.r, lamp.color.g, lamp.color.b])
-                scales.append(lamp.energy)
-            dataDictionary['lights'][lampObject.name]['type'] = "directional"
-            dataDictionary['lights'][lampObject.name]['direction'] = junction_path(directions)
-            dataDictionary['lights'][lampObject.name]['radiance'] = junction_path(radiances)
-            dataDictionary['lights'][lampObject.name]['scale'] = junction_path(scales)
+            if lamp.use_nodes and lamp.node_tree:
+                dataDictionary['lights'][lampObject.name].update(write_directional_light(self, lamp, lampObject, emissionNode, scn, frame_range))
+            else:
+                directions = []
+                radiances = []
+                scales = []
+                # Go through all frames, accumulate the to-be-exported quantities
+                for f in frame_range:
+                    scn.frame_set(f)
+                    directions.append(flip_space(lampObject.matrix_world.to_quaternion() @ Vector((0.0, 0.0, -1.0))))
+                    radiances.append([lamp.color.r, lamp.color.g, lamp.color.b])
+                    scales.append(lamp.energy)
+                dataDictionary['lights'][lampObject.name]['type'] = "directional"
+                dataDictionary['lights'][lampObject.name]['direction'] = junction_path(directions)
+                dataDictionary['lights'][lampObject.name]['radiance'] = junction_path(radiances)
+                dataDictionary['lights'][lampObject.name]['scale'] = junction_path(scales)
         elif lamp.type == "SPOT":
             if lampObject.name not in dataDictionary['lights']:
                 dataDictionary['lights'][lampObject.name] = collections.OrderedDict()
-            positions = []
-            directions = []
-            intensities = []
-            scales = []
-            widths = []
-            falloffs = []
-            # Go through all frames, accumulate the to-be-exported quantities
-            for f in frame_range:
-                scn.frame_set(f)
-                positions.append(flip_space(lampObject.location))
-                directions.append(flip_space(lampObject.matrix_world.to_quaternion() @ Vector((0.0, 0.0, -1.0))))
-                intensities.append([lamp.color.r, lamp.color.g, lamp.color.b])
-                scales.append(lamp.energy)
-                widths.append(lamp.spot_size / 2)
-                # Try to match the inner circle for the falloff (not exact, blender seems buggy):
-                # https://blender.stackexchange.com/questions/39555/how-to-calculate-blend-based-on-spot-size-and-inner-cone-angle
-                falloffs.append(math.atan(math.tan(lamp.spot_size / 2) * math.sqrt(1-lamp.spot_blend)))
-            dataDictionary['lights'][lampObject.name]['type'] = "spot"
-            dataDictionary['lights'][lampObject.name]['position'] = junction_path(positions)
-            dataDictionary['lights'][lampObject.name]['direction'] = junction_path(directions)
-            dataDictionary['lights'][lampObject.name]['intensity'] = junction_path(intensities)
-            dataDictionary['lights'][lampObject.name]['scale'] = junction_path(scales)
-            dataDictionary['lights'][lampObject.name]['width'] = junction_path(widths)
-            dataDictionary['lights'][lampObject.name]['falloffStart'] = junction_path(falloffs)
+            if lamp.use_nodes and lamp.node_tree:
+                dataDictionary['lights'][lampObject.name].update(write_spot_light(self, lamp, lampObject, emissionNode, scn, frame_range))
+            else:
+                positions = []
+                directions = []
+                intensities = []
+                scales = []
+                widths = []
+                falloffs = []
+                # Go through all frames, accumulate the to-be-exported quantities
+                for f in frame_range:
+                    scn.frame_set(f)
+                    positions.append(flip_space(lampObject.location))
+                    directions.append(flip_space(lampObject.matrix_world.to_quaternion() @ Vector((0.0, 0.0, -1.0))))
+                    intensities.append([lamp.color.r, lamp.color.g, lamp.color.b])
+                    scales.append(lamp.energy)
+                    widths.append(lamp.spot_size / 2)
+                    # Try to match the inner circle for the falloff (not exact, blender seems buggy):
+                    # https://blender.stackexchange.com/questions/39555/how-to-calculate-blend-based-on-spot-size-and-inner-cone-angle
+                    falloffs.append(math.atan(math.tan(lamp.spot_size / 2) * math.sqrt(1-lamp.spot_blend)))
+                dataDictionary['lights'][lampObject.name]['type'] = "spot"
+                dataDictionary['lights'][lampObject.name]['position'] = junction_path(positions)
+                dataDictionary['lights'][lampObject.name]['direction'] = junction_path(directions)
+                dataDictionary['lights'][lampObject.name]['intensity'] = junction_path(intensities)
+                dataDictionary['lights'][lampObject.name]['scale'] = junction_path(scales)
+                dataDictionary['lights'][lampObject.name]['width'] = junction_path(widths)
+                dataDictionary['lights'][lampObject.name]['falloffStart'] = junction_path(falloffs)
         else:
             self.report({'WARNING'}, ("Skipping unsupported lamp type: \"%s\" from: \"%s\"." % (lamp.type, lampObject.name)))
             continue
@@ -814,8 +976,7 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
                 self.report({'WARNING'}, ("Material '%s': displacement output is not supported yet"%(material.name)))
             if len(outputNode.inputs['Volume'].links):
                 self.report({'WARNING'}, ("Material '%s': volume output is not supported yet"%(material.name)))
-            # TODO: join the material dicts together
-            dataDictionary['materials'][material.name] = workDictionary
+            dataDictionary['materials'][material.name].update(workDictionary)
         except Exception as e:
             self.report({'ERROR'}, ("Material '%s' not converted: %s"%(material.name, str(e))))
             
