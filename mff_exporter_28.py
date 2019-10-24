@@ -489,7 +489,7 @@ def get_light_color_or_temperature(self, light, emissionType, emissionNode):
         if light.color.r != 1.0 or light.color.g != 1.0 or light.color.b != 1.0:
             self.report({'WARNING'}, ("Black-body light '%s' has a color scale which we cannot export; ignoring it!." % (light.name)))
         return get_scalar_def_only_input(emissionNode.inputs['Color'].links[0].from_node, 'Temperature')
-    elif isGoniometric:
+    elif emissionType == EmissionType.GONIOMETRIC:
         # TODO
         return 0.0
     else:
@@ -801,7 +801,7 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
                 dataDictionary['cameras'][cameraObject.name]['type'] = cameraType
                 dataDictionary['cameras'][cameraObject.name]['focalLength'] = camera.lens
                 dataDictionary['cameras'][cameraObject.name]['chipHeight'] = camera.sensor_height
-                dataDictionary['cameras'][cameraObject.name]['focusDistance'] = camera.dof_distance
+                dataDictionary['cameras'][cameraObject.name]['focusDistance'] = camera.dof.focus_distance
                 dataDictionary['cameras'][cameraObject.name]['aperture'] = aperture
         elif camera.type == "ORTHO":
             if cameraObject.name not in dataDictionary['cameras']:
