@@ -800,9 +800,13 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
                 cameraType = "focus"
                 dataDictionary['cameras'][cameraObject.name]['type'] = cameraType
                 dataDictionary['cameras'][cameraObject.name]['focalLength'] = camera.lens
-                dataDictionary['cameras'][cameraObject.name]['chipHeight'] = camera.sensor_height
                 dataDictionary['cameras'][cameraObject.name]['focusDistance'] = camera.dof.focus_distance
                 dataDictionary['cameras'][cameraObject.name]['aperture'] = aperture
+                dataDictionary['cameras'][cameraObject.name]['near'] = 1.0 # 'near' is treated as scaling factor, and we don't want scaling
+                # Getting the chip height is a bit more involved: since we may no longer explicitly set
+                # the sensor size, we have to compute it from the vertical FoV, focal length, and 
+                aspectRatio = scn.render.resolution_y / scn.render.resolution_x
+                dataDictionary['cameras'][cameraObject.name]['chipHeight'] = math.atan(camera.angle / 2.0) * 2.0 * camera.lens * aspectRatio
         elif camera.type == "ORTHO":
             if cameraObject.name not in dataDictionary['cameras']:
                 dataDictionary['cameras'][cameraObject.name] = collections.OrderedDict()
