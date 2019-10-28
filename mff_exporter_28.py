@@ -806,7 +806,7 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
                 # Getting the chip height is a bit more involved: since we may no longer explicitly set
                 # the sensor size, we have to compute it from the vertical FoV, focal length, and 
                 aspectRatio = scn.render.resolution_y / scn.render.resolution_x
-                dataDictionary['cameras'][cameraObject.name]['chipHeight'] = math.atan(camera.angle / 2.0) * 2.0 * camera.lens * aspectRatio
+                dataDictionary['cameras'][cameraObject.name]['chipHeight'] = math.tan(camera.angle / 2.0) * 2.0 * camera.lens * aspectRatio
         elif camera.type == "ORTHO":
             if cameraObject.name not in dataDictionary['cameras']:
                 dataDictionary['cameras'][cameraObject.name] = collections.OrderedDict()
