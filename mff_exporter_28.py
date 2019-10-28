@@ -589,6 +589,47 @@ def write_directional_light(self, light, lampObject, emissionNode, scene, frame_
     dict['scale'] = junction_path(scales)
     return dict
 
+def write_background(self, outNodeInput):
+    dict = collections.OrderedDict()
+    if len(outNodeInput.links) == 0:
+        raise Exception("There is no background; please check prior to writing background")
+    
+    dict['scale'] = 1.0
+    colorNode = outNodeInput.links[0].from_node
+    if colorNode.bl_idname == 'ShaderNodeBackground':
+        if len(colorNode.inputs['Color'].links) == 0:
+            # Plain monochromatic background
+            dict['type'] = 'envmap'
+            if len(colorNode.inputs['Strength'].links) > 0:
+                self.report({'WARNING'}, ("Background: non-scalar (linked) strength input for background is ignored (node '%s')"%(material.name, colorNode.name)))
+            else:
+                strength = colorNode.inputs['Strength'].default_value
+                dict['scale'] = [ strength * colorNode.inputs['Color'].default_value[0], strength * colorNode.inputs['Color'].default_value[0], strength * colorNode.inputs['Color'].default_value[0] ]
+        else:
+            # Two valid options: direct connection from env texture or a background node inbetween
+            if len(colorNode.inputs['Strength'].links) > 0:
+                self.report({'WARNING'}, ("Background: non-scalar (linked) strength input for background is ignored (node '%s')"%(material.name, colorNode.name)))
+            else:
+                dict['scale'] = colorNode.inputs['Strength'].default_value
+            colorNode = colorNode.inputs['Color'].links[0].from_node
+    
+    # Check if we have a color input node
+    if colorNode.bl_idname != 'ShaderNodeBackground':
+        print("Name:", colorNode.bl_idname)
+        if colorNode.bl_idname == 'ShaderNodeTexEnvironment' or colorNode.bl_idname == 'ShaderNodeTexImage':
+            if len(colorNode.inputs['Vector'].links) > 0:
+                self.report({'WARNING'}, ("Envmap: vector input (for e.g. rotation) is not supported yet (node '%s')"%(colorInNode.name)))
+            # TODO: warn about ignored options?
+            dict['map'] = make_path_relative_to_root(colorNode.image.filepath)
+        elif colorNode.bl_idname == 'ShaderNodeTexSky':
+            if len(colorNode.inputs['Vector'].links) > 0:
+                self.report({'WARNING'}, ("Sky: vector input (for e.g. rotation) is not supported yet (node '%s')"%(colorInNode.name)))
+            dict['type'] = 'sky'
+            dict['model'] = 'hosek'
+            dict['turbidity'] = colorNode.turbidity
+            dict['albedo'] = colorNode.ground_albedo
+            dict['sunDir'] = [ colorNode.sun_direction.x, colorNode.sun_direction.z, -colorNode.sun_direction.y ]
+    return dict
 
 class CustomJSONEncoder(json.JSONEncoder):
     # https://stackoverflow.com/questions/50700585/write-json-float-in-scientific-notation
@@ -1015,27 +1056,8 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
                 worldOutNode = find_world_output_node(world.node_tree)
                 if not worldOutNode is None:
                     if len(worldOutNode.inputs['Surface'].links) > 0:
-                        colorNode = worldOutNode.inputs['Surface'].links[0].from_node
-                        strength = 1.0
-                        # Two valid options: direct connection from env texture or a background node inbetween
-                        if colorNode.bl_idname == 'ShaderNodeBackground':
-                            if len(colorNode.inputs['Color'].links) == 0:
-                                raise Exception("background currently cannot be monochromatic (node '%s'"%(colorNode.name))
-                            else:
-                                if len(colorNode.inputs['Strength'].links) > 0:
-                                    self.report({'WARNING'}, ("Background: non-scalar (linked) strength input for background is ignored (node '%s')"%(material.name, colorNode.name)))
-                                else:
-                                    strength = colorNode.inputs['Strength'].default_value
-                                colorNode = colorNode.inputs['Color'].links[0].from_node
-                        if colorNode.bl_idname != 'ShaderNodeTexEnvironment':
-                            raise Exception("background lights other than envmaps are not supported yet (node '%s')"%(colorNode.name))
-                        if len(colorNode.inputs['Vector'].links) > 0:
-                            self.report({'WARNING'}, ("Background: vector input (for e.g. rotation) is not supported yet (node '%s')"%(colorNode.name)))
-                        backgroundName = scene.name + "_Envmap"
-                        dataDictionary['lights'][backgroundName] = collections.OrderedDict()
-                        dataDictionary['lights'][backgroundName]['type'] = 'envmap'
-                        dataDictionary['lights'][backgroundName]['map'] = make_path_relative_to_root(colorNode.image.filepath)
-                        dataDictionary['lights'][backgroundName]['scale'] = strength
+                        backgroundName = scene.name + "_Background"
+                        dataDictionary['lights'][backgroundName] = write_background(self, worldOutNode.inputs['Surface'])
                         lightNames.append(backgroundName)
                         sceneLightNames.append(backgroundName)
         except Exception as e:
