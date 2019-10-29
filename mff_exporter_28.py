@@ -617,6 +617,7 @@ def write_background(self, outNodeInput):
     if colorNode.bl_idname != 'ShaderNodeBackground':
         print("Name:", colorNode.bl_idname)
         if colorNode.bl_idname == 'ShaderNodeTexEnvironment' or colorNode.bl_idname == 'ShaderNodeTexImage':
+            dict['type'] = 'envmap'
             if len(colorNode.inputs['Vector'].links) > 0:
                 self.report({'WARNING'}, ("Envmap: vector input (for e.g. rotation) is not supported yet (node '%s')"%(colorInNode.name)))
             # TODO: warn about ignored options?
