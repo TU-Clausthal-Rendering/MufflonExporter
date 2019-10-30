@@ -1670,8 +1670,8 @@ class MufflonExporter(Operator, ExportHelper):
     bl_label = "Export Mufflon Scene"
 
     # ExportHelper mixin class uses this
-    filename_ext = ".json"
-    filter_glob = StringProperty(
+    filename_ext: ".json"
+    filter_glob: StringProperty(
             default="*.json;*.mff",
             options={'HIDDEN'},
             maxlen=255,  # Max internal buffer length, longer would be clamped.
@@ -1679,37 +1679,37 @@ class MufflonExporter(Operator, ExportHelper):
 
     # List of operator properties, the attributes will be assigned
     # to the class instance from the operator settings before calling.
-    use_selection = BoolProperty(
+    use_selection: BoolProperty(
             name="Selection Only",
             description="Export selected objects only",
             default=False,
             )
-    use_compression = BoolProperty(
+    use_compression: BoolProperty(
             name="Compress normals",
             description="Apply compression to vertex normals (Octahedral)",
             default=False,
             )
-    use_deflation = BoolProperty(
+    use_deflation: BoolProperty(
             name="Deflate",
             description="Use deflation to reduce file size",
             default=False,
             )
-    triangulate = BoolProperty(
+    triangulate: BoolProperty(
             name="Triangulate",
             description="Triangulates all exported objects",
             default=False,
             )
-    overwrite_default_scenario = BoolProperty(
+    overwrite_default_scenario: BoolProperty(
             name="Overwrite default scenario",
             description="Overwrite the default scenario when exporting JSON if already set",
             default=True,
             )
-    export_animation = BoolProperty(
+    export_animation: BoolProperty(
             name="Export animation",
             description="Exports instance transformations per animation frame",
             default=False,
             )
-    bake_textures = BoolProperty(
+    bake_textures: BoolProperty(
             name="Bake procedural textures",
             description="Bakes procedural textures used as e.g. color inputs and stores them on disk",
             default=False
