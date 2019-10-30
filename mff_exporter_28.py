@@ -1670,7 +1670,7 @@ class MufflonExporter(Operator, ExportHelper):
     bl_label = "Export Mufflon Scene"
 
     # ExportHelper mixin class uses this
-    filename_ext: ".json"
+    filename_ext = ".json"
     filter_glob: StringProperty(
             default="*.json;*.mff",
             options={'HIDDEN'},
