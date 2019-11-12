@@ -294,7 +294,12 @@ def write_torrance_node(self, material, node):
     if node.bl_idname == 'ShaderNodeBsdfAnisotropic':
         # TODO: rotation of anisotropy!
         # TODO: what to do about normal/tangent?
-        dict['roughness'] = [ dict['roughness'], get_scalar_def_only_input(node, 'Anisotropy') ]
+        # For a mapping of the anisotropy see https://developer.blender.org/diffusion/B/browse/master/intern/cycles/kernel/shaders/node_anisotropic_bsdf.osl
+        anisotropy = min(max(get_scalar_def_only_input(node, 'Anisotropy'), -0.99), 0.99)
+        if anisotropy < 0:
+            dict['roughness'] = [ dict['roughness'] / (1 + anisotropy), dict['roughness'] * (1 + anisotropy) ]
+        else:
+            dict['roughness'] = [ dict['roughness'] * (1 - anisotropy), dict['roughness'] / (1 - anisotropy) ]
         if len(node.inputs['Rotation'].links) > 0 or node.inputs['Rotation'].default_value != 0.0:
             self.report({'WARNING'}, ("Material '%s': Non-zero anisotropic rotation can currently not be converted properly"%(material.name)))
         if len(node.inputs['Normal'].links) > 0:
