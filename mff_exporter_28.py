@@ -73,13 +73,23 @@ def find_light_output_node(light):
         if node.bl_idname == 'ShaderNodeOutputLight' and node.is_active_output:
             return node
     return None
-    
+
 def find_world_output_node(tree):
     for node in tree.nodes:
         if node.bl_idname == 'ShaderNodeOutputWorld' and node.is_active_output:
             return node
     return None
-    
+
+
+# Delete all material keys which might exist due to a change of the material
+materialKeys = ["alpha", "displacement", "type", "albedo", "roughness", "ndf", "absorption", "radiance",
+                "scale", "factorA", "factorB", "layerA", "layerB", "layerReflection", "layerRefraction",
+                "clearcoat", "clearcoatRoughness", "sheen", "sheenTint", "specularTint", "specTrans",
+                "scatterDistance", "metallic", "baseColor", "ior", "shadowingModel", "anisotropic"]
+def remove_known_matkeys(json_material):
+    for key in materialKeys:
+        json_material.pop(key, None)
+
 
 def bake_texture_node(node, material, outputName, isScalar, bakeTextures):
     fileName = material.name + "_" + node.name + ".png"
@@ -186,7 +196,7 @@ def bake_texture_node(node, material, outputName, isScalar, bakeTextures):
     bpy.context.view_layer.update()
     
     return "baked_textures/" + fileName
-    
+
 def property_array_to_color(prop_array):
     return [ prop_array[0], prop_array[1], prop_array[2] ]
 
@@ -204,7 +214,7 @@ def get_color_input(material, node, inputName, bakeTextures):
         return property_array_to_color(input.default_value)
     else:
         return get_image_input(material, node, input.links[0].from_node, inputName, False, bakeTextures)
-        
+
 def get_scalar_input(material, node, inputName, bakeTextures):
     input = node.inputs[inputName]
     if len(input.links) == 0:
@@ -219,7 +229,7 @@ def get_scalar_def_only_input(node, inputName):
         return input.default_value
     else:
         raise Exception("non-value where only value is expected (node '%s.%s')"%(node.name, inputName))
-        
+
 def get_microfacet_distribution(self, materialName, node):
     if node.distribution == 'SHARP':
         # Doesn't matter since there's gonna be roughness 0
@@ -341,7 +351,7 @@ def write_principled_node(self, material, node):
         self.report({'WARNING'}, ("Material '%s': Non-zero normal input is currently ignored"%(material.name)))
     # TODO: warn about other ignored inputs (clearcoat normal, tangent, emission, alpha, subsurface method, distribution, transmission roughness)
     return dict
-    
+
 def write_nonrecursive_node(self, material, node):
     # TODO: support for principled BSDF?
     if node.bl_idname == 'ShaderNodeBsdfDiffuse':
@@ -653,7 +663,6 @@ class CustomJSONEncoder(json.JSONEncoder):
 def flip_space(vec):
     return [vec[0], vec[2], -vec[1]]
 
-materialKeys = ["alpha", "displacement", "type", "albedo", "roughness", "ndf", "absorption", "radiance", "scale", "refractionIndex", "factorA", "factorB", "layerA", "layerB", "layerReflection", "layerRefraction"]
 rootFilePath = ""
 
 
@@ -811,7 +820,7 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
         dataDictionary['lights'] = collections.OrderedDict()
         dataDictionary['materials'] = collections.OrderedDict()
         dataDictionary['scenarios'] = collections.OrderedDict()
-    
+
     # Store current frame to reset it later
     frame_current = scn.frame_current
     frame_range = range(scn.frame_start, scn.frame_end + 1) if export_animation else [frame_current]
@@ -999,7 +1008,7 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
         if material.name not in dataDictionary['materials']:
             dataDictionary['materials'][material.name] = collections.OrderedDict()
 
-        
+
         # First get the node that actually determines the material properties
         outputNode = find_material_output_node(material)
         if outputNode is None:
@@ -1022,6 +1031,9 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
                 self.report({'WARNING'}, ("Material '%s': displacement output is not supported yet"%(material.name)))
             if len(outputNode.inputs['Volume'].links):
                 self.report({'WARNING'}, ("Material '%s': volume output is not supported yet"%(material.name)))
+            # Remove known keys from material if the type changed in between (keep unknown, because they
+            # are probably user added content)
+            remove_known_matkeys(dataDictionary['materials'][material.name])
             dataDictionary['materials'][material.name].update(workDictionary)
         except Exception as e:
             self.report({'ERROR'}, ("Material '%s' not converted: %s"%(material.name, str(e))))
