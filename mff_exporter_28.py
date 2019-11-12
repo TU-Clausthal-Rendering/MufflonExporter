@@ -275,7 +275,7 @@ def write_diffuse_node(self, material, node):
     else:
         raise Exception("non-value for diffuse roughness (node '%s')"%(node.name))
     return dict
-    
+
 def write_torrance_node(self, material, node):
     dict = collections.OrderedDict()
     dict['type'] = 'torrance'
@@ -308,7 +308,7 @@ def write_torrance_node(self, material, node):
             self.report({'WARNING'}, ("Material '%s': Non-zero tangent input is currently ignored"%(material.name)))
     
     return dict
-    
+
 def write_walter_node(self, material, node):
     dict = collections.OrderedDict()
     dict['type'] = 'walter'
@@ -330,7 +330,7 @@ def write_walter_node(self, material, node):
     dict['ndf'] = get_microfacet_distribution(self, material.name, node)
     dict['ior'] = get_scalar_def_only_input(node, 'IOR')
     return dict
-    
+
 def write_principled_node(self, material, node):
     dict = collections.OrderedDict()
     dict['type'] = 'disney'
@@ -372,7 +372,7 @@ def write_nonrecursive_node(self, material, node):
     else:
         # TODO: allow recursion? Currently not supported by our renderer
         raise Exception("invalid mix-shader input (node '%s')"%(node.name))
-        
+
 def write_glass_node(self, material, node):
     dict = collections.OrderedDict()
     # First check if the color has texture input, in which case we can't use the full microfacet model
@@ -382,7 +382,7 @@ def write_glass_node(self, material, node):
         dict = write_walter_node(self, material, node)
         dict['type'] = 'microfacet'
     return dict
-    
+
 def write_mix_node(self, material, node, hasAlphaAlready):
     dict = collections.OrderedDict()
     if len(node.inputs[1].links) == 0 or len(node.inputs[2].links) == 0:
@@ -1240,6 +1240,10 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
     print("Exporting objects...")
     activeObject = context.view_layer.objects.active    # Keep this for resetting later
     exportedObjects = OrderedDict()
+    mode = 'OBJECT'
+    if context.object:
+        mode = context.object.mode   # Keep this for resetting later
+        bpy.ops.object.mode_set(mode='OBJECT')
     for objIdx in range(0, len(instances) + len(animationObjects)):
         isAnimatedObject = objIdx >= len(instances)
         currentObject = animationObjects[objIdx - len(instances)] if isAnimatedObject else instances[objIdx]
@@ -1276,7 +1280,7 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
         lodChainStart = 0
         # TODO: LoD chain
         if len(lodLevels) == 0:
-            lodLevels.append(currentObject)  # if no LOD levels the object itself ist the only LOD level
+            lodLevels.append(currentObject)  # if no LOD levels the object itself is the only LOD level
 
         boundingBox = lodLevels[0].bound_box
 
@@ -1318,19 +1322,16 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
             hidden = lodObject.hide_render
             lodObject.hide_render = False
             context.view_layer.objects.active = lodObject
-            mode = lodObject.mode
-            bpy.ops.object.mode_set(mode='EDIT')
             if "sphere" not in lodObject:
-                mesh = lodObject.to_mesh(preserve_all_data_layers=True)  # applies all modifiers
+                appliedObject = lodObject.evaluated_get(context.evaluated_depsgraph_get()) # applies all modifiers
+                mesh = appliedObject.to_mesh()
                 bm = bmesh.new()
                 bm.from_mesh(mesh)  # bmesh gives a local editable mesh copy
-                faces = bm.faces
-                faces.ensure_lookup_table()
                 facesToTriangulate = []
-                for k in range(len(faces)):
-                    if len(faces[k].edges) > 4 or (triangulate and len(faces[k].edges) > 3):
-                        facesToTriangulate.append(faces[k])
-                bmesh.ops.triangulate(bm, faces=facesToTriangulate[:], quad_method='BEAUTY', ngon_method='BEAUTY')
+                for face in bm.faces:
+                    if len(face.edges) > 4 or (triangulate and len(face.edges) > 3):
+                        facesToTriangulate.append(face)
+                bmesh.ops.triangulate(bm, faces=facesToTriangulate, quad_method='BEAUTY', ngon_method='BEAUTY')
                 # Split vertices if vertex has multiple uv coordinates (is used in multiple triangles)
                 # or if it is not smooth
                 if len(lodObject.data.uv_layers) > 0:
@@ -1341,12 +1342,10 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
                     or not all(f.smooth for f in e.link_faces)]
                 bmesh.ops.split_edges(bm, edges=edgesToSplit)
 
-                faces = bm.faces  # update faces
-                faces.ensure_lookup_table()
                 numberOfTriangles = 0
                 numberOfQuads = 0
-                for k in range(len(faces)):
-                    numVertices = len(faces[k].verts)
+                for face in bm.faces:
+                    numVertices = len(face.verts)
                     if numVertices == 3:
                         numberOfTriangles += 1
                     elif numVertices == 4:
@@ -1577,11 +1576,12 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
                     binary.extend(len(sphereOutData).to_bytes(4, byteorder='little'))
                     binary.extend(len(sphereDataArray).to_bytes(4, byteorder='little'))
                 binary.extend(sphereOutData)
-            # reset used mode
-            bpy.ops.object.mode_set(mode=mode)
+            # reset used state
             lodObject.hide_render = hidden
     #reset active object
     context.view_layer.objects.active = activeObject
+    if mode != 'OBJECT':
+        bpy.ops.object.mode_set(mode=mode)
 
     # Instances
     write_num(binary, instanceSectionStartBinaryPosition, 8, len(binary))
