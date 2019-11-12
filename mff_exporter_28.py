@@ -85,7 +85,7 @@ def find_world_output_node(tree):
 materialKeys = ["alpha", "displacement", "type", "albedo", "roughness", "ndf", "absorption", "radiance",
                 "scale", "factorA", "factorB", "layerA", "layerB", "layerReflection", "layerRefraction",
                 "clearcoat", "clearcoatRoughness", "sheen", "sheenTint", "specularTint", "specTrans",
-                "scatterDistance", "metallic", "baseColor", "ior", "shadowingModel", "anisotropic"]
+                "scatterDistance", "metallic", "baseColor", "ior", "shadowingModel", "anisotropic", "outerMedium"]
 def remove_known_matkeys(json_material):
     for key in materialKeys:
         json_material.pop(key, None)
@@ -492,7 +492,18 @@ def write_mix_node(self, material, node, hasAlphaAlready):
         
     return dict
 
-    
+
+def write_outer_medium(self, workDictionary, material):
+    mediumProp = material.get("outerMedium")
+    if mediumProp != None:
+        if len(mediumProp) != 4:
+            self.report({'WARNING'}, ("The material '%s' has an outerMedium property, but property is not a vec4!" % material.name))
+        else:
+            workDictionary['outerMedium'] = collections.OrderedDict()
+            workDictionary['outerMedium']['ior'] = mediumProp[0]
+            workDictionary['outerMedium']['absorption'] = [ mediumProp[1], mediumProp[2], mediumProp[3] ]
+
+
 # Reads the color or temperature of the light source
 def get_light_color_or_temperature(self, light, emissionType, emissionNode):
     if emissionType == EmissionType.BLACKBODY:
@@ -505,7 +516,7 @@ def get_light_color_or_temperature(self, light, emissionType, emissionNode):
     else:
         color = get_scalar_def_only_input(emissionNode, 'Color')
         return [light.color.r * color[0], light.color.g * color[1], light.color.b * color[2]]
-    
+
 def write_point_light(self, light, lampObject, emissionNode, scene, frame_range):
     emissionType = get_emission_type(emissionNode)
     if emissionType == EmissionType.GONIOMETRIC:
@@ -532,7 +543,7 @@ def write_point_light(self, light, lampObject, emissionNode, scene, frame_range)
         dict['flux'] = junction_path(fluxes)
     dict['scale'] = junction_path(scales)
     return dict
-    
+
 def write_spot_light(self, light, lampObject, emissionNode, scene, frame_range):
     emissionType = get_emission_type(emissionNode)
     if emissionType == EmissionType.GONIOMETRIC:
@@ -1031,6 +1042,7 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
                 self.report({'WARNING'}, ("Material '%s': displacement output is not supported yet"%(material.name)))
             if len(outputNode.inputs['Volume'].links):
                 self.report({'WARNING'}, ("Material '%s': volume output is not supported yet"%(material.name)))
+            write_outer_medium(self, workDictionary, material)
             # Remove known keys from material if the type changed in between (keep unknown, because they
             # are probably user added content)
             remove_known_matkeys(dataDictionary['materials'][material.name])
