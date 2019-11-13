@@ -715,9 +715,9 @@ def is_instance(obj):
         return False
     # At the moment only meshes and perfect spheres can be exported.
     # Maybe there is an NURBS or Bezier-spline export in feature...
-    # 'sphere' is a custom property used to flag perfect spheres.
+    # 'mufflon_sphere' is a custom property used to flag perfect spheres.
     # Camera, Lamp, ... are skipped by this if, too.
-    if obj.type != "MESH" and "sphere" not in obj:
+    if obj.type != "MESH" and not obj.mufflon_sphere:
         return False
     # An object can be 'usual', 'lod_instance' xor 'lod_mesh' where the latter is not an instance.
     if is_lod_mesh(obj):
@@ -766,7 +766,7 @@ def create_per_frame_object(scn, instance, animationObjects, frame_range, nameSn
 # Check if the transformation is valid. In case of spheres there should not be a rotation or
 # non-uniform scaling.
 def validate_transformation(self, instance):
-    if "sphere" in instance:
+    if instance.mufflon_sphere:
         if instance.rotation_euler != mathutils.Euler((0.0, 0.0, 0.0), 'XYZ'):
             self.report({'WARNING'}, ("Perfect sphere object \"%s\" has a rotation which will be ignored." % (instance.name)))
         if instance.scale[0] != instance.scale[1] or instance.scale[0] != instance.scale[2]:
@@ -1320,7 +1320,7 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
             hidden = lodObject.hide_render
             lodObject.hide_render = False
             context.view_layer.objects.active = lodObject
-            if "sphere" not in lodObject:
+            if not lodObject.mufflon_sphere:
                 appliedObject = lodObject.evaluated_get(context.evaluated_depsgraph_get()) # applies all modifiers
                 mesh = appliedObject.to_mesh()
                 bm = bmesh.new()
@@ -1386,7 +1386,7 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
             binary.extend(numberOfFaceAttributes.to_bytes(4, byteorder='little'))
             # Number of Sphere Attributes
             binary.extend(numberOfSphereAttributes.to_bytes(4, byteorder='little'))
-            if "sphere" not in lodObject:
+            if not lodObject.mufflon_sphere:
                 # Vertex data
                 vertices = mesh.vertices
                 mesh.calc_normals()
@@ -1790,21 +1790,40 @@ class OuterMediumPanel(Panel):
     def draw_header(self, context):
         self.layout.prop(context.active_object.active_material.outer_medium, "enabled", text="")
 
+class SpherePanel(Panel):
+    bl_idname = "OBJECT_mufflon_sphere"
+    bl_label = "Perfect Sphere (Mufflon)"
+    bl_space_type = "PROPERTIES"
+    bl_region_type = "WINDOW"
+    bl_context = "object"
+
+    def draw(self, context):
+        pass
+
+    def draw_header(self, context):
+        self.layout.prop(context.active_object, "mufflon_sphere", text="")
+
+
+classes = (
+    MufflonExporter,
+    OuterMediumProperties,
+    OuterMediumPanel,
+    SpherePanel
+)
 
 def register():
-    bpy.utils.register_class(MufflonExporter)
-    bpy.utils.register_class(OuterMediumProperties)
-    bpy.utils.register_class(OuterMediumPanel)
+    for cls in classes:
+        bpy.utils.register_class(cls)
     bpy.types.TOPBAR_MT_file_export.append(menu_func_export)
 
     bpy.types.Material.outer_medium = PointerProperty(type=OuterMediumProperties)
+    bpy.types.Object.mufflon_sphere = BoolProperty()
 
 
 def unregister():
+    for cls in reversed(classes):
+        bpy.utils.unregister_class(cls)
     bpy.types.TOPBAR_MT_file_export.remove(menu_func_export)
-    bpy.utils.unregister_class(OuterMediumPanel)
-    bpy.utils.unregister_class(OuterMediumProperties)
-    bpy.utils.unregister_class(MufflonExporter)
 
 
 if __name__ == "__main__":
