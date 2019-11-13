@@ -230,6 +230,10 @@ def get_scalar_def_only_input(node, inputName):
     else:
         raise Exception("non-value where only value is expected (node '%s.%s')"%(node.name, inputName))
 
+# Transform an RGB [0,1]^3 color attribute into a physical absorption value [0,∞]
+def get_mapped_absorption(color):
+    return [ max(0, 1 / (1e-10 + color[0]) - 1), max(0, 1 / (1e-10 + color[1]) - 1), max(0, 1 / (1e-10 + color[2]) - 1) ]
+
 def get_microfacet_distribution(self, materialName, node):
     if node.distribution == 'SHARP':
         # Doesn't matter since there's gonna be roughness 0
@@ -316,9 +320,7 @@ def write_walter_node(self, material, node):
     # Check if the 'color' is a string or none (which means no inverting possible)
     # TODO: write 'color' out instead of absorption (since inverting a texture is difficult/expensive)
     if (dict['absorption'] is not None) and not isinstance(dict['absorption'], str):
-        dict['absorption'][0] = 1.0 - dict['absorption'][0]
-        dict['absorption'][1] = 1.0 - dict['absorption'][1]
-        dict['absorption'][2] = 1.0 - dict['absorption'][2]
+        dict['absorption'] = get_mapped_absorption(dict['absorption'])
     if node.distribution == 'SHARP':
         dict['roughness'] = 0.0
     else:
@@ -499,14 +501,10 @@ def write_mix_node(self, material, node, hasAlphaAlready):
 
 
 def write_outer_medium(self, workDictionary, material):
-    mediumProp = material.get("outerMedium")
-    if mediumProp != None:
-        if len(mediumProp) != 4:
-            self.report({'WARNING'}, ("The material '%s' has an outerMedium property, but property is not a vec4!" % material.name))
-        else:
-            workDictionary['outerMedium'] = collections.OrderedDict()
-            workDictionary['outerMedium']['ior'] = mediumProp[0]
-            workDictionary['outerMedium']['absorption'] = [ mediumProp[1], mediumProp[2], mediumProp[3] ]
+    if material.outer_medium.enabled:
+        workDictionary['outerMedium'] = collections.OrderedDict()
+        workDictionary['outerMedium']['ior'] = material.outer_medium.ior
+        workDictionary['outerMedium']['absorption'] = get_mapped_absorption(material.outer_medium.transmission)
 
 
 # Reads the color or temperature of the light source
@@ -1689,8 +1687,8 @@ def pack_normal32(vec3):
 # ExportHelper is a helper class, defines filename and
 # invoke() function which calls the file selector.
 from bpy_extras.io_utils import (ExportHelper, path_reference_mode)
-from bpy.props import StringProperty, BoolProperty, EnumProperty
-from bpy.types import Operator
+from bpy.props import StringProperty, BoolProperty, EnumProperty, PointerProperty, FloatProperty, FloatVectorProperty
+from bpy.types import Operator, Panel, PropertyGroup
 
 
 class MufflonExporter(Operator, ExportHelper):
@@ -1756,15 +1754,57 @@ class MufflonExporter(Operator, ExportHelper):
 def menu_func_export(self, context):
     self.layout.operator(MufflonExporter.bl_idname, text="Mufflon (.json/.mff)")
 
+class OuterMediumProperties(PropertyGroup):
+    enabled: BoolProperty(
+        name = "Enable outer medium",
+        description = "If disabled the outside of an object is assumed to be vacuum. The outer medium allows a different specification.",
+        default = False
+    )
+    ior: FloatProperty(
+        name = "IOR",
+        description = "Index of Refraction",
+        min = 0.0,
+        default = 1.0
+    )
+    transmission: FloatVectorProperty(
+        name = "Transmission",
+        description = "Gets mapped to an absorption equal to that of BSDF color parameters.",
+        subtype = 'COLOR',
+        min = 0.0,
+        max = 1.0,
+    )
+
+class OuterMediumPanel(Panel):
+    bl_idname = "MATERIAL_outer_medium"
+    bl_label = "Outer Medium"
+    bl_space_type = "PROPERTIES"
+    bl_region_type = 'WINDOW'
+    bl_context = "material"
+
+    def draw(self, context):
+        self.layout.use_property_split = True
+        self.layout.enabled = context.active_object.active_material.outer_medium.enabled
+        self.layout.prop(context.active_object.active_material.outer_medium, "ior")
+        self.layout.prop(context.active_object.active_material.outer_medium, "transmission")
+
+    def draw_header(self, context):
+        self.layout.prop(context.active_object.active_material.outer_medium, "enabled", text="")
+
 
 def register():
     bpy.utils.register_class(MufflonExporter)
+    bpy.utils.register_class(OuterMediumProperties)
+    bpy.utils.register_class(OuterMediumPanel)
     bpy.types.TOPBAR_MT_file_export.append(menu_func_export)
+
+    bpy.types.Material.outer_medium = PointerProperty(type=OuterMediumProperties)
 
 
 def unregister():
-    bpy.utils.unregister_class(MufflonExporter)
     bpy.types.TOPBAR_MT_file_export.remove(menu_func_export)
+    bpy.utils.unregister_class(OuterMediumPanel)
+    bpy.utils.unregister_class(OuterMediumProperties)
+    bpy.utils.unregister_class(MufflonExporter)
 
 
 if __name__ == "__main__":
