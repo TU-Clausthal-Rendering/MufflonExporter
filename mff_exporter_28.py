@@ -746,23 +746,6 @@ def write_vertex_normals(vertexDataArray, mesh, use_compression):
             else:
                 vertexDataArray.extend(struct.pack('<3f', *mesh.vertices[k].normal))
 
-# Creates and appends an object after applying all modifiers for each frame in range
-def create_per_frame_object(scn, instance, animationObjects, frame_range, nameSnippet, smoothNormals=True):
-    print("Converting '", instance.name, "' to per-frame mesh")
-    # Now for each frame, add an object with applied modifiers
-    for f in frame_range:
-        scn.frame_set(f)
-        mesh = instance.to_mesh(scn, True, calc_tessface=False, settings='RENDER')  # applies all modifiers
-        # Animated objects (fluids, cloth) should have smooth surfaces -> smooth normals
-        if smoothNormals:
-            for p in mesh.polygons:
-                p.use_smooth = True
-        obj = bpy.data.objects.new(instance.name + nameSnippet + str(f), mesh)
-        obj.matrix_world = instance.matrix_world
-        scn.objects.link(obj)
-        obj.select = True
-        animationObjects.append(obj)
-
 # Check if the transformation is valid. In case of spheres there should not be a rotation or
 # non-uniform scaling.
 def validate_transformation(self, instance):
@@ -1132,6 +1115,337 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
 #   #  #  #  #  ##  #######  #  #    #
 #   ###   #  #   #  #     #  #  #    #
 
+def prepare_object_mesh(self, context, lod, triangulate):
+    appliedObject = lod.evaluated_get(context.evaluated_depsgraph_get()) # applies all modifiers
+    mesh = appliedObject.to_mesh()
+    bm = bmesh.new()
+    bm.from_mesh(mesh)  # bmesh gives a local editable mesh copy
+    facesToTriangulate = []
+    for face in bm.faces:
+        if len(face.edges) > 4 or (triangulate and len(face.edges) > 3):
+            facesToTriangulate.append(face)
+    if len(facesToTriangulate) > 0:
+        bmesh.ops.triangulate(bm, faces=facesToTriangulate, quad_method='BEAUTY', ngon_method='BEAUTY')
+    # Split vertices if vertex has multiple uv coordinates (is used in multiple triangles)
+    # or if it is not smooth
+    if len(lod.data.uv_layers) > 0:
+        # mark seams from uv islands
+        if bpy.ops.uv.seams_from_islands.poll():
+            bpy.ops.uv.seams_from_islands()
+    edgesToSplit = [e for e in bm.edges if e.seam or not e.smooth
+        or not all(f.smooth for f in e.link_faces)]
+    if len(edgesToSplit) > 0:
+        bmesh.ops.split_edges(bm, edges=edgesToSplit)
+
+    numberOfTriangles = 0
+    numberOfQuads = 0
+    for face in bm.faces:
+        numVertices = len(face.verts)
+        if numVertices == 3:
+            numberOfTriangles += 1
+        elif numVertices == 4:
+            numberOfQuads += 1
+        else:
+            self.report({'ERROR'}, ("%d Vertices in face from object: \"%s\"." % (numVertices, lod.name)))
+            return
+    # Only change the mesh if any changes have been performed
+    if len(facesToTriangulate) > 0 or len(edgesToSplit) > 0:
+        bm.to_mesh(mesh)
+    bm.free()
+    
+    return mesh, numberOfTriangles, numberOfQuads
+
+def write_object_binary(self, context, binary, materialLookup, currentObject, currObjectName, keyframe, triangulate, use_compression, use_deflation):
+    # First write object header information
+    binary.extend("Obj_".encode())                                  # Type check
+    objectName = currObjectName.encode()                            # Object name
+    objectNameLength = len(objectName)
+    binary.extend(objectNameLength.to_bytes(4, byteorder='little'))
+    binary.extend(objectName)
+    # Write the object flags (NOT compression/deflation, but rather isEmissive etc)
+    objectFlagsBinaryPosition = len(binary)
+    objectFlags = 0
+    binary.extend(objectFlags.to_bytes(4, byteorder='little'))
+    binary.extend(keyframe.to_bytes(4, byteorder='little'))         # Keyframe
+    # OBJID of previous object in animation
+    binary.extend((0xFFFFFFFF).to_bytes(4, byteorder='little'))     # TODO keyframes
+    
+    # Bounding box
+    # Calculate Lod chain to get bounding box over all Lods
+    lodLevels = []
+    lodChainStart = 0
+    # TODO: LoD chain
+    if len(lodLevels) == 0:
+        lodLevels.append(currentObject)  # if no LOD levels the object itself is the only LOD level
+
+    boundingBox = lodLevels[0].bound_box
+
+    boundingBoxMin = [boundingBox[7][0], boundingBox[7][1], boundingBox[7][2]]
+    boundingBoxMax = [boundingBox[7][0], boundingBox[7][1], boundingBox[7][2]]
+
+    for lodObject in lodLevels:
+        boundingBox = lodObject.bound_box
+        # Set bounding box min/max to last element of the bb
+        # boundingBoxMin = flip_space((boundingBox[7][0], boundingBox[7][1], boundingBox[7][2]))
+        # boundingBoxMax = boundingBoxMin.copy()
+
+        for j in range(7):  # 0-6
+            corner = [ boundingBox[j][0], boundingBox[j][1], boundingBox[j][2] ]
+            for k in range(3):  # x y z
+                if corner[k] < boundingBoxMin[k]:
+                    boundingBoxMin[k] = corner[k]
+                if corner[k] > boundingBoxMax[k]:
+                    boundingBoxMax[k] = corner[k]
+    binary.extend(struct.pack('<3f', *boundingBoxMin))    # '<' = little endian  3 = 3 times f  'f' = float32
+    binary.extend(struct.pack('<3f', *boundingBoxMax))
+    # <Jump Table> LOD
+
+    # Number of entries in table
+    binary.extend((len(lodLevels)).to_bytes(4, byteorder='little'))
+    lodStartBinaryPosition = len(binary)
+    # Jump table for LoDs
+    for j in range(len(lodLevels)):
+        binary.extend((0).to_bytes(8, byteorder='little'))  # has to be corrected when the value is known
+    # Write the actual LoD data (vertices, normals etc.)
+    for j in range(len(lodLevels)):
+        lodObject = lodLevels[(lodChainStart+j+1) % len(lodLevels)]  # for the correct starting object
+        # start Positions
+        write_num(binary, lodStartBinaryPosition + j*8, 8, len(binary))
+        # Type
+        binary.extend("LOD_".encode())
+        # Needs to set the target object to active, to be able to apply changes.
+        if len(lodObject.users_scene) < 1:
+            continue
+        context.window.scene = lodObject.users_scene[0] # Choose a valid scene which contains the object
+        hidden = lodObject.hide_render
+        lodObject.hide_render = False
+        context.view_layer.objects.active = lodObject
+        if not lodObject.mufflon_sphere:
+            mesh, numberOfTriangles, numberOfQuads = prepare_object_mesh(self, context, lodObject, triangulate)
+            numberOfSpheres = 0
+            numberOfVertices = len(mesh.vertices)
+            numberOfEdges = len(mesh.edges)
+            numberOfVertexAttributes = 0
+            numberOfFaceAttributes = 0  # TODO Face Attributes
+            numberOfSphereAttributes = 0
+        else:  # Change Values if it is an sphere
+            numberOfTriangles = 0
+            numberOfQuads = 0
+            numberOfSpheres = 1
+            numberOfVertices = 0
+            numberOfEdges = 0
+            numberOfVertexAttributes = 0
+            numberOfFaceAttributes = 0
+            numberOfSphereAttributes = 0  # TODO Sphere Attributes
+
+        # Number of Triangles
+        binary.extend(numberOfTriangles.to_bytes(4, byteorder='little'))
+        # Number of Quads
+        binary.extend(numberOfQuads.to_bytes(4, byteorder='little'))
+        # Number of Spheres
+        binary.extend(numberOfSpheres.to_bytes(4, byteorder='little'))
+        # Number of Vertices
+        binary.extend(numberOfVertices.to_bytes(4, byteorder='little'))
+        # Number of Edges
+        binary.extend(numberOfEdges.to_bytes(4, byteorder='little'))
+        # Number of Vertex Attributes
+        numberOfVertexAttributesBinaryPosition = len(binary)  # has to be corrected when value is known
+        binary.extend(numberOfVertexAttributes.to_bytes(4, byteorder='little'))
+        # Number of Face Attributes
+        binary.extend(numberOfFaceAttributes.to_bytes(4, byteorder='little'))
+        # Number of Sphere Attributes
+        binary.extend(numberOfSphereAttributes.to_bytes(4, byteorder='little'))
+        if not lodObject.mufflon_sphere:
+            # Vertex data
+            vertices = mesh.vertices
+            mesh.calc_normals()
+            if mesh.has_custom_normals:
+                mesh.calc_normals_split()
+            uvCoordinates = numpy.empty(len(vertices), dtype=object)
+            if len(mesh.uv_layers) == 0:
+                self.report({'WARNING'}, ("LOD Object: \"%s\" has no uv layers." % (lodObject.name)))
+                for k in range(len(uvCoordinates)):
+                    uvCoordinates[k] = spherical_projected_uv_coordinate(vertices[k].co)
+            else:
+                uv_layer = mesh.uv_layers[0]
+                for polygon in mesh.polygons:
+                    for loop_index in range(polygon.loop_start, polygon.loop_start + polygon.loop_total):
+                        uvCoordinates[mesh.loops[loop_index].vertex_index] = uv_layer.data[loop_index].uv
+                            
+            vertexDataArray = bytearray()  # Used for deflation
+            for k in range(len(vertices)):
+                vertexDataArray.extend(struct.pack('<3f', *mesh.vertices[k].co))
+            write_vertex_normals(vertexDataArray, mesh, use_compression)
+            for k in range(len(vertices)):
+                vertexDataArray.extend(struct.pack('<2f', uvCoordinates[k][0], uvCoordinates[k][1]))
+            vertexOutData = vertexDataArray
+            if use_deflation and len(vertexDataArray) > 0:
+                vertexOutData = zlib.compress(vertexDataArray, 8)
+                binary.extend(len(vertexOutData).to_bytes(4, byteorder='little'))
+                binary.extend(len(vertexDataArray).to_bytes(4, byteorder='little'))
+            binary.extend(vertexOutData)
+
+            # Vertex Attributes
+            vertexAttributesDataArray = bytearray()  # Used for deflation
+            for uvNumber in range(len(mesh.uv_layers)):  # get Number of Vertex Attributes
+                if uvNumber == 0:
+                    continue
+                uv_layer = mesh.uv_layers[uvNumber]
+                if not uv_layer:
+                    continue
+                numberOfVertexAttributes += 1
+            for colorNumber in range(len(mesh.vertex_colors)):
+                vertex_color = mesh.vertex_colors[colorNumber]
+                if not vertex_color:
+                    continue
+                numberOfVertexAttributes += 1
+
+            if numberOfVertexAttributes > 0:
+                write_num(binary, numberOfVertexAttributesBinaryPosition, 4, numberOfVertexAttributes)
+
+                binary.extend("Attr".encode())
+                for uvNumber in range(len(mesh.uv_layers)):
+                    if uvNumber == 0:
+                        continue
+                    uvCoordinates = numpy.empty(len(vertices), dtype=object)
+                    uv_layer = mesh.uv_layers[uvNumber]
+                    if not uv_layer:
+                        continue
+                    uvName = uv_layer.name
+                    vertexAttributesDataArray.extend(len(uvName.encode()).to_bytes(4, byteorder='little'))
+                    vertexAttributesDataArray.extend(uvName.encode())
+                    vertexAttributesDataArray.extend((0).to_bytes(4, byteorder='little'))  # No meta information
+                    vertexAttributesDataArray.extend((0).to_bytes(4, byteorder='little'))  # No meta information
+                    vertexAttributesDataArray.extend((16).to_bytes(4, byteorder='little'))  # Type: 2*f32 (16)
+                    vertexAttributesDataArray.extend((len(vertices)*4*2).to_bytes(8, byteorder='little'))  # Count of Bytes len(vertices) * 4(f32) * 2(uvCoordinates per vertex)
+                    for polygon in mesh.polygons:
+                        for loop_index in range(polygon.loop_start, polygon.loop_start + polygon.loop_total):
+                            uvCoordinates[mesh.loops[loop_index].vertex_index] = uv_layer.data[loop_index].uv
+                    for k in range(len(vertices)):
+                        vertexAttributesDataArray.extend(struct.pack('<2f', uvCoordinates[k][0], uvCoordinates[k][1]))
+                for colorNumber in range(len(mesh.vertex_colors)):
+                    vertexColor = numpy.empty(len(vertices), dtype=object)
+                    vertex_color_layer = mesh.vertex_colors[colorNumber]
+                    if not vertex_color_layer:
+                        continue
+                    colorName = vertex_color_layer.name
+                    vertexAttributesDataArray.extend(len(colorName.encode()).to_bytes(4, byteorder='little'))
+                    vertexAttributesDataArray.extend(colorName.encode())
+                    vertexAttributesDataArray.extend((0).to_bytes(4, byteorder='little'))  # No meta information
+                    vertexAttributesDataArray.extend((0).to_bytes(4, byteorder='little'))  # No meta information
+                    vertexAttributesDataArray.extend((17).to_bytes(4, byteorder='little'))  # Type: 3*f32 (17)
+                    vertexAttributesDataArray.extend((len(vertices)*4*3).to_bytes(8, byteorder='little'))  # Count of Bytes len(vertices) * 4(f32) * 3(color channels per vertex)
+                    for polygon in mesh.polygons:
+                        for loop_index in range(polygon.loop_start, polygon.loop_start + polygon.loop_total):
+                            vertexColor[mesh.loops[loop_index].vertex_index] = vertex_color_layer.data[loop_index].color
+                    for k in range(len(vertices)):
+                        vertexAttributesDataArray.extend(struct.pack('<3f', vertexColor[k][0], vertexColor[k][1], vertexColor[k][2]))
+
+            vertexAttributesOutData = vertexAttributesDataArray
+            if use_deflation and len(vertexAttributesDataArray) > 0:
+                vertexAttributesOutData = zlib.compress(vertexAttributesDataArray, 8)
+                binary.extend(len(vertexAttributesOutData).to_bytes(4, byteorder='little'))
+                binary.extend(len(vertexAttributesDataArray).to_bytes(4, byteorder='little'))
+            binary.extend(vertexAttributesOutData)
+
+            # TODO more Vertex Attributes? (with deflation)
+            # Triangles
+            triangleDataArray = bytearray()  # Used for deflation
+            for polygon in mesh.polygons:
+                if len(polygon.vertices) == 3:
+                    for k in range(3):
+                        triangleDataArray.extend(polygon.vertices[k].to_bytes(4, byteorder='little'))
+            triangleOutData = triangleDataArray
+            if use_deflation and len(triangleDataArray) > 0:
+                triangleOutData = zlib.compress(triangleDataArray, 8)
+                binary.extend(len(triangleOutData).to_bytes(4, byteorder='little'))
+                binary.extend(len(triangleDataArray).to_bytes(4, byteorder='little'))
+            binary.extend(triangleOutData)
+            # Quads
+            quadDataArray = bytearray()  # Used for deflation
+            for polygon in mesh.polygons:
+                if len(polygon.vertices) == 4:
+                    for k in range(4):
+                        quadDataArray.extend(polygon.vertices[k].to_bytes(4, byteorder='little'))
+            quadOutData = quadDataArray
+            if use_deflation and len(quadDataArray) > 0:
+                quadOutData = zlib.compress(quadDataArray, 8)
+                binary.extend(len(quadOutData).to_bytes(4, byteorder='little'))
+                binary.extend(len(quadDataArray).to_bytes(4, byteorder='little'))
+            binary.extend(quadOutData)
+            # Material IDs
+            matIDDataArray = bytearray()
+            if len(mesh.materials) == 0:
+                self.report({'WARNING'}, ("LOD Object: \"%s\" has no materials." % (lodObject.name)))
+            for polygon in mesh.polygons:
+                if len(polygon.vertices) == 3:
+                    if len(mesh.materials) != 0:
+                        matIDDataArray.extend(materialLookup[mesh.materials[polygon.material_index].name].to_bytes(2, byteorder='little'))
+                    else:
+                        matIDDataArray.extend((0).to_bytes(2, byteorder='little'))
+            for polygon in mesh.polygons:
+                if len(polygon.vertices) == 4:
+                    if len(mesh.materials) != 0:
+                        matIDDataArray.extend(materialLookup[mesh.materials[polygon.material_index].name].to_bytes(2, byteorder='little'))
+                    else:
+                        matIDDataArray.extend((0).to_bytes(2, byteorder='little')) # first material is default when the object has no mats
+            if (objectFlags & 1) == 0:
+                if len(mesh.materials) != 0:
+                    for polygon in mesh.polygons:
+                        if len(mesh.materials) != 0:
+                            # Check if the material emits light
+                            for node in mesh.materials[polygon.material_index].node_tree.nodes:
+                                if node.bl_idname == 'ShaderNodeEmission' and (len(node.inputs['Strength'].links) > 0 or (node.inputs['Strength'].default_value > 0.0)):
+                                    objectFlags |= 1
+                                    objectFlagsBin = objectFlags.to_bytes(4, byteorder='little')
+                                    for k in range(4):
+                                        binary[objectFlagsBinaryPosition + k] = objectFlagsBin[k]
+                                    break
+            else:
+                if materials[0] > 0.0:  # first material is default when the object has no mats
+                    objectFlags |= 1
+                    objectFlagsBin = objectFlags.to_bytes(4, byteorder='little')
+                    for k in range(4):
+                        binary[objectFlagsBinaryPosition + k] = objectFlagsBin[k]
+            matIDOutData = matIDDataArray
+            if use_deflation and len(matIDDataArray) > 0:
+                matIDOutData = zlib.compress(matIDDataArray, 8)
+                binary.extend(len(matIDOutData).to_bytes(4, byteorder='little'))
+                binary.extend(len(matIDDataArray).to_bytes(4, byteorder='little'))
+            binary.extend(matIDOutData)
+            # Face Attributes
+            # TODO Face Attributes (with deflation)
+            lodObject.to_mesh_clear()
+        else:
+            # Spheres
+            sphereDataArray = bytearray()
+            center = ( (boundingBoxMin[0] + boundingBoxMax[0]) / 2,
+                       (boundingBoxMin[1] + boundingBoxMax[1]) / 2,
+                       (boundingBoxMin[2] + boundingBoxMax[2]) / 2 )
+            radius = abs(boundingBoxMin[0]-center[0])
+            sphereDataArray.extend(struct.pack('<3f', *center))
+            sphereDataArray.extend(struct.pack('<f', radius))
+
+            if lodObject.active_material is not None:
+                sphereDataArray.extend(materialLookup[lodObject.active_material.name].to_bytes(2, byteorder='little'))
+                if (objectFlags & 1) == 0:
+                    if 'Emission' in lodObject.active_material.node_tree.nodes:
+                        objectFlags |= 1
+                        write_num(binary, objectFlagsBinaryPosition, 4, objectFlags)
+            else:
+                self.report({'WARNING'}, ("LOD Object: \"%s\" has no materials." % (lodObject.name)))
+                sphereDataArray.extend((0).to_bytes(2, byteorder='little'))  # first material is default when the object has no mats
+
+            sphereOutData = sphereDataArray
+            # TODO Sphere Attributes
+            if use_deflation and len(sphereDataArray) > 0:
+                sphereOutData = zlib.compress(sphereDataArray, 8)
+                binary.extend(len(sphereOutData).to_bytes(4, byteorder='little'))
+                binary.extend(len(sphereDataArray).to_bytes(4, byteorder='little'))
+            binary.extend(sphereOutData)
+        # reset used state
+        lodObject.hide_render = hidden
+
 def export_binary(context, self, filepath, use_selection, use_deflation, use_compression,
                   triangulate, export_animation):
     scn = context.scene
@@ -1214,11 +1528,11 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
                 if fluidMods:
                     # Check if we're the fluid, in which case we simply don't export the object
                     if fluidMods[0].settings.type == "DOMAIN":
-                        create_per_frame_object(scn, instance, animationObjects, frame_range, "_fluidsim_frame_", True)
+                        animationObjects.append(instance)
                     elif fluidMods[0].settings.type != "FLUID":
                         remainingInstances.append(instance)
                 elif clothMods:
-                    create_per_frame_object(scn, instance, animationObjects, frame_range, "_clothsim_frame_", True)
+                    animationObjects.append(instance)
                 else:
                     remainingInstances.append(instance)
                 
@@ -1227,7 +1541,7 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
 
     # Get the number of unique data references. While it hurts to perform an entire set construction
     # there is no much better way. The object count must be known to construct the jump-table properly.
-    countOfObjects = len({obj.data for obj in instances}) + len(animationObjects)
+    countOfObjects = len({obj.data for obj in instances}) + len(animationObjects) * len(frame_range)
     binary.extend(countOfObjects.to_bytes(4, byteorder='little'))
 
     objectStartBinaryPosition = []  # Save Position in binary to set this correct later
@@ -1242,340 +1556,36 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
     if context.object:
         mode = context.object.mode   # Keep this for resetting later
         bpy.ops.object.mode_set(mode='OBJECT')
-    for objIdx in range(0, len(instances) + len(animationObjects)):
-        isAnimatedObject = objIdx >= len(instances)
-        currentObject = animationObjects[objIdx - len(instances)] if isAnimatedObject else instances[objIdx]
+        
+    # Export regular objects
+    print("Exporting non-animated objects...")
+    for currentObject in instances:
         # Due to instancing a mesh might be referenced multiple times
         if currentObject.data in exportedObjects:
             continue
-        keyframe = (frame_range[0] + ((objIdx - len(instances)) % len(frame_range))) if isAnimatedObject else 0xFFFFFFFF
-        if isAnimatedObject and keyframe == frame_range[0]:
-            print(currentObject.name, " (animated, ", len(frame_range), " frames)")
-        elif not isAnimatedObject:
-            print(currentObject.name)
+        print(currentObject.name)
         idx = len(exportedObjects)
         exportedObjects[currentObject.data] = idx # Store index for the instance export
         write_num(binary, objectStartBinaryPosition[idx], 8, len(binary)) # object start position
-        # Type check
-        binary.extend("Obj_".encode())
-        # Object name
-        objectName = currentObject.data.name.encode()
-        objectNameLength = len(objectName)
-        binary.extend(objectNameLength.to_bytes(4, byteorder='little'))
-        binary.extend(objectName)
-        # Write the object flags (NOT compression/deflation, but rather isEmissive etc)
-        objectFlagsBinaryPosition = len(binary)
-        objectFlags = 0
-        binary.extend(objectFlags.to_bytes(4, byteorder='little'))
-        # keyframe (computed from the animated object index)
-        binary.extend(keyframe.to_bytes(4, byteorder='little'))  # TODO keyframes
-        # OBJID of previous object in animation
-        binary.extend((0xFFFFFFFF).to_bytes(4, byteorder='little'))  # TODO keyframes
-        # Bounding box
-
-        # Calculate Lod chain to get bounding box over all Lods
-        lodLevels = []
-        lodChainStart = 0
-        # TODO: LoD chain
-        if len(lodLevels) == 0:
-            lodLevels.append(currentObject)  # if no LOD levels the object itself is the only LOD level
-
-        boundingBox = lodLevels[0].bound_box
-
-        boundingBoxMin = [boundingBox[7][0], boundingBox[7][1], boundingBox[7][2]]
-        boundingBoxMax = [boundingBox[7][0], boundingBox[7][1], boundingBox[7][2]]
-
-        for lodObject in lodLevels:
-            boundingBox = lodObject.bound_box
-            # Set bounding box min/max to last element of the bb
-            # boundingBoxMin = flip_space((boundingBox[7][0], boundingBox[7][1], boundingBox[7][2]))
-            # boundingBoxMax = boundingBoxMin.copy()
-
-            for j in range(7):  # 0-6
-                corner = [ boundingBox[j][0], boundingBox[j][1], boundingBox[j][2] ]
-                for k in range(3):  # x y z
-                    if corner[k] < boundingBoxMin[k]:
-                        boundingBoxMin[k] = corner[k]
-                    if corner[k] > boundingBoxMax[k]:
-                        boundingBoxMax[k] = corner[k]
-        binary.extend(struct.pack('<3f', *boundingBoxMin))    # '<' = little endian  3 = 3 times f  'f' = float32
-        binary.extend(struct.pack('<3f', *boundingBoxMax))
-        # <Jump Table> LOD
-
-        # Number of entries in table
-        binary.extend((len(lodLevels)).to_bytes(4, byteorder='little'))
-        lodStartBinaryPosition = len(binary)
-        for j in range(len(lodLevels)):
-            binary.extend((0).to_bytes(8, byteorder='little'))  # has to be corrected when the value is known
-        for j in range(len(lodLevels)):
-            lodObject = lodLevels[(lodChainStart+j+1) % len(lodLevels)]  # for the correct starting object
-            # start Positions
-            write_num(binary, lodStartBinaryPosition + j*8, 8, len(binary))
-            # Type
-            binary.extend("LOD_".encode())
-            # Needs to set the target object to active, to be able to apply changes.
-            if len(lodObject.users_scene) < 1:
-                continue
-            context.window.scene = lodObject.users_scene[0] # Choose a valid scene which contains the object
-            hidden = lodObject.hide_render
-            lodObject.hide_render = False
-            context.view_layer.objects.active = lodObject
-            if not lodObject.mufflon_sphere:
-                appliedObject = lodObject.evaluated_get(context.evaluated_depsgraph_get()) # applies all modifiers
-                mesh = appliedObject.to_mesh()
-                bm = bmesh.new()
-                bm.from_mesh(mesh)  # bmesh gives a local editable mesh copy
-                facesToTriangulate = []
-                for face in bm.faces:
-                    if len(face.edges) > 4 or (triangulate and len(face.edges) > 3):
-                        facesToTriangulate.append(face)
-                bmesh.ops.triangulate(bm, faces=facesToTriangulate, quad_method='BEAUTY', ngon_method='BEAUTY')
-                # Split vertices if vertex has multiple uv coordinates (is used in multiple triangles)
-                # or if it is not smooth
-                if len(lodObject.data.uv_layers) > 0:
-                    # mark seams from uv islands
-                    if bpy.ops.uv.seams_from_islands.poll():
-                        bpy.ops.uv.seams_from_islands()
-                edgesToSplit = [e for e in bm.edges if e.seam or not e.smooth
-                    or not all(f.smooth for f in e.link_faces)]
-                bmesh.ops.split_edges(bm, edges=edgesToSplit)
-
-                numberOfTriangles = 0
-                numberOfQuads = 0
-                for face in bm.faces:
-                    numVertices = len(face.verts)
-                    if numVertices == 3:
-                        numberOfTriangles += 1
-                    elif numVertices == 4:
-                        numberOfQuads += 1
-                    else:
-                        self.report({'ERROR'}, ("%d Vertices in face from object: \"%s\"." % (numVertices, lodObject.name)))
-                        return
-                bm.to_mesh(mesh)
-                bm.free()
-                numberOfSpheres = 0
-                numberOfVertices = len(mesh.vertices)
-                numberOfEdges = len(mesh.edges)
-                numberOfVertexAttributes = 0
-                numberOfFaceAttributes = 0  # TODO Face Attributes
-                numberOfSphereAttributes = 0
-            else:  # Change Values if it is an sphere
-                numberOfTriangles = 0
-                numberOfQuads = 0
-                numberOfSpheres = 1
-                numberOfVertices = 0
-                numberOfEdges = 0
-                numberOfVertexAttributes = 0
-                numberOfFaceAttributes = 0
-                numberOfSphereAttributes = 0  # TODO Sphere Attributes
-
-            # Number of Triangles
-            binary.extend(numberOfTriangles.to_bytes(4, byteorder='little'))
-            # Number of Quads
-            binary.extend(numberOfQuads.to_bytes(4, byteorder='little'))
-            # Number of Spheres
-            binary.extend(numberOfSpheres.to_bytes(4, byteorder='little'))
-            # Number of Vertices
-            binary.extend(numberOfVertices.to_bytes(4, byteorder='little'))
-            # Number of Edges
-            binary.extend(numberOfEdges.to_bytes(4, byteorder='little'))
-            # Number of Vertex Attributes
-            numberOfVertexAttributesBinaryPosition = len(binary)  # has to be corrected when value is known
-            binary.extend(numberOfVertexAttributes.to_bytes(4, byteorder='little'))
-            # Number of Face Attributes
-            binary.extend(numberOfFaceAttributes.to_bytes(4, byteorder='little'))
-            # Number of Sphere Attributes
-            binary.extend(numberOfSphereAttributes.to_bytes(4, byteorder='little'))
-            if not lodObject.mufflon_sphere:
-                # Vertex data
-                vertices = mesh.vertices
-                mesh.calc_normals()
-                if mesh.has_custom_normals:
-                    mesh.calc_normals_split()
-                uvCoordinates = numpy.empty(len(vertices), dtype=object)
-                if len(mesh.uv_layers) == 0:
-                    self.report({'WARNING'}, ("LOD Object: \"%s\" has no uv layers." % (lodObject.name)))
-                    for k in range(len(uvCoordinates)):
-                        uvCoordinates[k] = spherical_projected_uv_coordinate(vertices[k].co)
-                else:
-                    uv_layer = mesh.uv_layers[0]
-                    for polygon in mesh.polygons:
-                        for loop_index in range(polygon.loop_start, polygon.loop_start + polygon.loop_total):
-                            uvCoordinates[mesh.loops[loop_index].vertex_index] = uv_layer.data[loop_index].uv
-                                
-                vertexDataArray = bytearray()  # Used for deflation
-                for k in range(len(vertices)):
-                    vertexDataArray.extend(struct.pack('<3f', *mesh.vertices[k].co))
-                write_vertex_normals(vertexDataArray, mesh, use_compression)
-                for k in range(len(vertices)):
-                    vertexDataArray.extend(struct.pack('<2f', uvCoordinates[k][0], uvCoordinates[k][1]))
-                vertexOutData = vertexDataArray
-                if use_deflation and len(vertexDataArray) > 0:
-                    vertexOutData = zlib.compress(vertexDataArray, 8)
-                    binary.extend(len(vertexOutData).to_bytes(4, byteorder='little'))
-                    binary.extend(len(vertexDataArray).to_bytes(4, byteorder='little'))
-                binary.extend(vertexOutData)
-
-                # Vertex Attributes
-                vertexAttributesDataArray = bytearray()  # Used for deflation
-                for uvNumber in range(len(mesh.uv_layers)):  # get Number of Vertex Attributes
-                    if uvNumber == 0:
-                        continue
-                    uv_layer = mesh.uv_layers[uvNumber]
-                    if not uv_layer:
-                        continue
-                    numberOfVertexAttributes += 1
-                for colorNumber in range(len(mesh.vertex_colors)):
-                    vertex_color = mesh.vertex_colors[colorNumber]
-                    if not vertex_color:
-                        continue
-                    numberOfVertexAttributes += 1
-
-                if numberOfVertexAttributes > 0:
-                    write_num(binary, numberOfVertexAttributesBinaryPosition, 4, numberOfVertexAttributes)
-
-                    binary.extend("Attr".encode())
-                    for uvNumber in range(len(mesh.uv_layers)):
-                        if uvNumber == 0:
-                            continue
-                        uvCoordinates = numpy.empty(len(vertices), dtype=object)
-                        uv_layer = mesh.uv_layers[uvNumber]
-                        if not uv_layer:
-                            continue
-                        uvName = uv_layer.name
-                        vertexAttributesDataArray.extend(len(uvName.encode()).to_bytes(4, byteorder='little'))
-                        vertexAttributesDataArray.extend(uvName.encode())
-                        vertexAttributesDataArray.extend((0).to_bytes(4, byteorder='little'))  # No meta information
-                        vertexAttributesDataArray.extend((0).to_bytes(4, byteorder='little'))  # No meta information
-                        vertexAttributesDataArray.extend((16).to_bytes(4, byteorder='little'))  # Type: 2*f32 (16)
-                        vertexAttributesDataArray.extend((len(vertices)*4*2).to_bytes(8, byteorder='little'))  # Count of Bytes len(vertices) * 4(f32) * 2(uvCoordinates per vertex)
-                        for polygon in mesh.polygons:
-                            for loop_index in range(polygon.loop_start, polygon.loop_start + polygon.loop_total):
-                                uvCoordinates[mesh.loops[loop_index].vertex_index] = uv_layer.data[loop_index].uv
-                        for k in range(len(vertices)):
-                            vertexAttributesDataArray.extend(struct.pack('<2f', uvCoordinates[k][0], uvCoordinates[k][1]))
-                    for colorNumber in range(len(mesh.vertex_colors)):
-                        vertexColor = numpy.empty(len(vertices), dtype=object)
-                        vertex_color_layer = mesh.vertex_colors[colorNumber]
-                        if not vertex_color_layer:
-                            continue
-                        colorName = vertex_color_layer.name
-                        vertexAttributesDataArray.extend(len(colorName.encode()).to_bytes(4, byteorder='little'))
-                        vertexAttributesDataArray.extend(colorName.encode())
-                        vertexAttributesDataArray.extend((0).to_bytes(4, byteorder='little'))  # No meta information
-                        vertexAttributesDataArray.extend((0).to_bytes(4, byteorder='little'))  # No meta information
-                        vertexAttributesDataArray.extend((17).to_bytes(4, byteorder='little'))  # Type: 3*f32 (17)
-                        vertexAttributesDataArray.extend((len(vertices)*4*3).to_bytes(8, byteorder='little'))  # Count of Bytes len(vertices) * 4(f32) * 3(color channels per vertex)
-                        for polygon in mesh.polygons:
-                            for loop_index in range(polygon.loop_start, polygon.loop_start + polygon.loop_total):
-                                vertexColor[mesh.loops[loop_index].vertex_index] = vertex_color_layer.data[loop_index].color
-                        for k in range(len(vertices)):
-                            vertexAttributesDataArray.extend(struct.pack('<3f', vertexColor[k][0], vertexColor[k][1], vertexColor[k][2]))
-
-                vertexAttributesOutData = vertexAttributesDataArray
-                if use_deflation and len(vertexAttributesDataArray) > 0:
-                    vertexAttributesOutData = zlib.compress(vertexAttributesDataArray, 8)
-                    binary.extend(len(vertexAttributesOutData).to_bytes(4, byteorder='little'))
-                    binary.extend(len(vertexAttributesDataArray).to_bytes(4, byteorder='little'))
-                binary.extend(vertexAttributesOutData)
-
-                # TODO more Vertex Attributes? (with deflation)
-                # Triangles
-                triangleDataArray = bytearray()  # Used for deflation
-                for polygon in mesh.polygons:
-                    if len(polygon.vertices) == 3:
-                        for k in range(3):
-                            triangleDataArray.extend(polygon.vertices[k].to_bytes(4, byteorder='little'))
-                triangleOutData = triangleDataArray
-                if use_deflation and len(triangleDataArray) > 0:
-                    triangleOutData = zlib.compress(triangleDataArray, 8)
-                    binary.extend(len(triangleOutData).to_bytes(4, byteorder='little'))
-                    binary.extend(len(triangleDataArray).to_bytes(4, byteorder='little'))
-                binary.extend(triangleOutData)
-                # Quads
-                quadDataArray = bytearray()  # Used for deflation
-                for polygon in mesh.polygons:
-                    if len(polygon.vertices) == 4:
-                        for k in range(4):
-                            quadDataArray.extend(polygon.vertices[k].to_bytes(4, byteorder='little'))
-                quadOutData = quadDataArray
-                if use_deflation and len(quadDataArray) > 0:
-                    quadOutData = zlib.compress(quadDataArray, 8)
-                    binary.extend(len(quadOutData).to_bytes(4, byteorder='little'))
-                    binary.extend(len(quadDataArray).to_bytes(4, byteorder='little'))
-                binary.extend(quadOutData)
-                # Material IDs
-                matIDDataArray = bytearray()
-                if len(mesh.materials) == 0:
-                    self.report({'WARNING'}, ("LOD Object: \"%s\" has no materials." % (lodObject.name)))
-                for polygon in mesh.polygons:
-                    if len(polygon.vertices) == 3:
-                        if len(mesh.materials) != 0:
-                            matIDDataArray.extend(materialLookup[mesh.materials[polygon.material_index].name].to_bytes(2, byteorder='little'))
-                        else:
-                            matIDDataArray.extend((0).to_bytes(2, byteorder='little'))
-                for polygon in mesh.polygons:
-                    if len(polygon.vertices) == 4:
-                        if len(mesh.materials) != 0:
-                            matIDDataArray.extend(materialLookup[mesh.materials[polygon.material_index].name].to_bytes(2, byteorder='little'))
-                        else:
-                            matIDDataArray.extend((0).to_bytes(2, byteorder='little')) # first material is default when the object has no mats
-                if (objectFlags & 1) == 0:
-                    if len(mesh.materials) != 0:
-                        for polygon in mesh.polygons:
-                            if len(mesh.materials) != 0:
-                                # Check if the material emits light
-                                for node in mesh.materials[polygon.material_index].node_tree.nodes:
-                                    if node.bl_idname == 'ShaderNodeEmission' and (len(node.inputs['Strength'].links) > 0 or (node.inputs['Strength'].default_value > 0.0)):
-                                        objectFlags |= 1
-                                        objectFlagsBin = objectFlags.to_bytes(4, byteorder='little')
-                                        for k in range(4):
-                                            binary[objectFlagsBinaryPosition + k] = objectFlagsBin[k]
-                                        break
-                else:
-                    if materials[0] > 0.0:  # first material is default when the object has no mats
-                        objectFlags |= 1
-                        objectFlagsBin = objectFlags.to_bytes(4, byteorder='little')
-                        for k in range(4):
-                            binary[objectFlagsBinaryPosition + k] = objectFlagsBin[k]
-                matIDOutData = matIDDataArray
-                if use_deflation and len(matIDDataArray) > 0:
-                    matIDOutData = zlib.compress(matIDDataArray, 8)
-                    binary.extend(len(matIDOutData).to_bytes(4, byteorder='little'))
-                    binary.extend(len(matIDDataArray).to_bytes(4, byteorder='little'))
-                binary.extend(matIDOutData)
-                # Face Attributes
-                # TODO Face Attributes (with deflation)
-                lodObject.to_mesh_clear()
-            else:
-                # Spheres
-                sphereDataArray = bytearray()
-                center = ( (boundingBoxMin[0] + boundingBoxMax[0]) / 2,
-                           (boundingBoxMin[1] + boundingBoxMax[1]) / 2,
-                           (boundingBoxMin[2] + boundingBoxMax[2]) / 2 )
-                radius = abs(boundingBoxMin[0]-center[0])
-                sphereDataArray.extend(struct.pack('<3f', *center))
-                sphereDataArray.extend(struct.pack('<f', radius))
-
-                if lodObject.active_material is not None:
-                    sphereDataArray.extend(materialLookup[lodObject.active_material.name].to_bytes(2, byteorder='little'))
-                    if (objectFlags & 1) == 0:
-                        if 'Emission' in lodObject.active_material.node_tree.nodes:
-                            objectFlags |= 1
-                            write_num(binary, objectFlagsBinaryPosition, 4, objectFlags)
-                else:
-                    self.report({'WARNING'}, ("LOD Object: \"%s\" has no materials." % (lodObject.name)))
-                    sphereDataArray.extend((0).to_bytes(2, byteorder='little'))  # first material is default when the object has no mats
-
-                sphereOutData = sphereDataArray
-                # TODO Sphere Attributes
-                if use_deflation and len(sphereDataArray) > 0:
-                    sphereOutData = zlib.compress(sphereDataArray, 8)
-                    binary.extend(len(sphereOutData).to_bytes(4, byteorder='little'))
-                    binary.extend(len(sphereDataArray).to_bytes(4, byteorder='little'))
-                binary.extend(sphereOutData)
-            # reset used state
-            lodObject.hide_render = hidden
+        write_object_binary(self, context, binary, materialLookup, currentObject, currentObject.data.name,
+                            0xFFFFFFFF, triangulate, use_compression, use_deflation)
+        
+    # Export animated objects (cloth, fluid etc.)
+    # TODO: shape key support?
+    print("Exporting animated objects...")
+    idx = len(exportedObjects)
+    for currentObject in animationObjects:
+        print(currentObject.name)
+        # These need to be exported for every frame
+        for f in frame_range:
+            scn.frame_set(f)
+            # Implicit object index (no instancing supported)
+            write_num(binary, objectStartBinaryPosition[idx], 8, len(binary)) # object start position
+            write_object_binary(self, context, binary, materialLookup, currentObject,
+                                currentObject.data.name + "__animated__frame_" + str(f),
+                                f, triangulate, use_compression, use_deflation)
+            idx += 1
+    
     #reset active object
     context.view_layer.objects.active = activeObject
     if mode != 'OBJECT':
@@ -1590,48 +1600,51 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
     numberOfInstancesBinaryPosition = len(binary)
     binary.extend((0).to_bytes(4, byteorder='little'))  # has to be corrected later
     numberOfInstances = 0
-    print("Exporting animated instances...")
-    # Export animated object-instances (different meshes per frame) separately as
-    # they don't need per-frame treatment
-    for instanceIdx in range(0, len(animationObjects)):
-        animatedInstance = animationObjects[instanceIdx]
-        index = exportedObjects[animatedInstance.data]
-        binary.extend(len(animatedInstance.name.encode()).to_bytes(4, byteorder='little'))
-        binary.extend(animatedInstance.name.encode())
-        binary.extend(index.to_bytes(4, byteorder='little'))  # Object ID
-        keyframe = frame_range[0] + (instanceIdx % len(frame_range))
-        binary.extend(keyframe.to_bytes(4, byteorder='little')) # Keyframe
-        binary.extend((0xFFFFFFFF).to_bytes(4, byteorder='little'))  # TODO Instance ID
-        transformMat = validate_transformation(self, animatedInstance)
-        write_instance_transformation(binary, transformMat)
-        numberOfInstances += 1
-        # Remove the animated object
-        bpy.ops.object.select_all(action='DESELECT')
-        animatedInstance.select = True
-        bpy.ops.object.delete()
-        
-    print("Exporting regular instances...")
+    
+    print("Exporting all-frame instances...")
+    perFrameInstances = []
     for currentInstance in instances:
         index = exportedObjects[currentInstance.data]
-        transMats = []
-        instanceAnimated = False
-        for f in frame_range:
-            scn.frame_set(f)
+        # Check if the object has animation data
+        if currentInstance.animation_data is not None:
+            perFrameInstances.append(currentInstance)
+            continue
+        binary.extend(len(currentInstance.name.encode()).to_bytes(4, byteorder='little'))
+        binary.extend(currentInstance.name.encode())
+        binary.extend(index.to_bytes(4, byteorder='little'))  # Object ID
+        binary.extend((0xFFFFFFFF).to_bytes(4, byteorder='little')) # Keyframe
+        binary.extend((0xFFFFFFFF).to_bytes(4, byteorder='little'))  # TODO Instance ID
+        write_instance_transformation(binary, validate_transformation(self, currentInstance))
+        numberOfInstances += 1
+        
+    print("Exporting per-frame instances...")
+    for f in frame_range:
+        scn.frame_set(f)
+        # First the "normal" instances for this frame
+        for currentInstance in perFrameInstances:
             transformMat = validate_transformation(self, currentInstance)
-            if not instanceAnimated and len(transMats) > 0 and transMats[0] != transformMat:
-                instanceAnimated = True
-            transMats.append(transformMat.copy())
-        scn.frame_set(frame_current)
-        if not instanceAnimated:
-            transMats = [transMats[0]]
-        for f in range(0, len(transMats)):
+            index = exportedObjects[currentInstance.data]
             binary.extend(len(currentInstance.name.encode()).to_bytes(4, byteorder='little'))
             binary.extend(currentInstance.name.encode())
             binary.extend(index.to_bytes(4, byteorder='little'))  # Object ID
-            keyframe = (frame_range[0] + f) if instanceAnimated else 0xFFFFFFFF
-            binary.extend(keyframe.to_bytes(4, byteorder='little')) # Keyframe
+            binary.extend(f.to_bytes(4, byteorder='little')) # Keyframe
             binary.extend((0xFFFFFFFF).to_bytes(4, byteorder='little'))  # TODO Instance ID
-            write_instance_transformation(binary, transMats[f])
+            write_instance_transformation(binary, validate_transformation(self, currentInstance))
+            numberOfInstances += 1
+        # Then come the animated object's instances
+        # Each object is exported for the entire frame range
+        for i in range(0, len(animationObjects)):
+            animatedInstance = animationObjects[i]
+            # Implicit object index: there is no "real" instancing
+            index = len(exportedObjects) + i * len(frame_range) + f - frame_range[0]
+            name = (animatedInstance.name + "__animated__frame_" + str(f)).encode()
+            binary.extend(len(name).to_bytes(4, byteorder='little'))
+            binary.extend(name)
+            binary.extend(index.to_bytes(4, byteorder='little'))  # Object ID
+            binary.extend(f.to_bytes(4, byteorder='little')) # Keyframe
+            binary.extend((0xFFFFFFFF).to_bytes(4, byteorder='little'))  # TODO Instance ID
+            transformMat = validate_transformation(self, animatedInstance)
+            write_instance_transformation(binary, transformMat)
             numberOfInstances += 1
         
     # Now that we're done we know the amount of instances
@@ -1827,4 +1840,4 @@ def unregister():
 
 
 if __name__ == "__main__":
-    register()
+    unregister()
