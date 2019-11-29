@@ -771,20 +771,23 @@ def spherical_projected_uv_coordinate(vertexCoords):
     return [u, v]
 
 def write_instance_transformation(binary, transformMat):
+    # As of version 1.4 we store the inverted matrices (ie. world-to-instance instead of instance-to-world)
+    invTransformMat = mathutils.Matrix([ transformMat[0], transformMat[2], -transformMat[1], transformMat[3] ])
+    invTransformMat.invert()
     # Apply the flip_space transformation on instance transformation level.
-    binary.extend(struct.pack('<4f', *transformMat[0]))
-    binary.extend(struct.pack('<4f', *transformMat[2]))
+    binary.extend(struct.pack('<4f', *invTransformMat[0]))
+    binary.extend(struct.pack('<4f', *invTransformMat[2]))
     for k in range(4):
-        binary.extend(struct.pack('<f', -transformMat[1][k]))
+        binary.extend(struct.pack('<f', -invTransformMat[1][k]))
 
 def is_animated_instance(instance):
     # Check if there is an animation block or constraints
-    return (instance.animation_data is not None) or ((instance.constraints is not None) and (len(instance.constraints) > 0)):
+    return (instance.animation_data is not None) or ((instance.constraints is not None) and (len(instance.constraints) > 0))
 
 
 def export_json(context, self, filepath, binfilepath, use_selection, overwrite_default_scenario,
                 export_animation):
-    version = "1.3"
+    version = "1.4"
     binary = os.path.relpath(binfilepath, os.path.commonpath([filepath, binfilepath]))
     global rootFilePath; rootFilePath = os.path.dirname(filepath)
 
@@ -1608,7 +1611,7 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
     for currentInstance in instances:
         index = exportedObjects[currentInstance.data]
         # Check if the object has animation data
-        if is_animated_instance(currentInstance)
+        if is_animated_instance(currentInstance):
             perFrameInstances.append(currentInstance)
             continue
         binary.extend(len(currentInstance.name.encode()).to_bytes(4, byteorder='little'))
