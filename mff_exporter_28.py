@@ -777,7 +777,9 @@ def write_instance_transformation(binary, transformMat):
     for k in range(4):
         binary.extend(struct.pack('<f', -transformMat[1][k]))
 
-
+def is_animated_instance(instance):
+    # Check if there is an animation block or constraints
+    return (instance.animation_data is not None) or ((instance.constraints is not None) and (len(instance.constraints) > 0)):
 
 
 def export_json(context, self, filepath, binfilepath, use_selection, overwrite_default_scenario,
@@ -1606,7 +1608,7 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
     for currentInstance in instances:
         index = exportedObjects[currentInstance.data]
         # Check if the object has animation data
-        if currentInstance.animation_data is not None:
+        if is_animated_instance(currentInstance)
             perFrameInstances.append(currentInstance)
             continue
         binary.extend(len(currentInstance.name.encode()).to_bytes(4, byteorder='little'))
