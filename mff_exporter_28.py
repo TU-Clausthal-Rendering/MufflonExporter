@@ -782,11 +782,34 @@ def write_instance_transformation(binary, transformMat):
 def is_animated_instance(instance):
     # Check if there is an animation block or constraints
     return (instance.animation_data is not None) or ((instance.constraints is not None) and (len(instance.constraints) > 0))
+    
+def get_blender_viewport_near_far_planes(context):
+    # Try to find a suitable area
+    ctxArea = None
+    for window in context.window_manager.windows:
+        for area in window.screen.areas:
+            if area.type == 'VIEW_3D':
+                ctxArea = area
+                break
+        if ctxArea is not None:
+            break
+    # Fallback: use some random one
+    if ctxArea is None:
+        ctxArea = context.window_manager.windows[0].screen.areas[0]
+    
+    oldAreaType = ctxArea.type
+    ctxArea.type = 'VIEW_3D'
+    
+    clipStart = ctxArea.spaces[0].clip_start
+    clipEnd = ctxArea.spaces[0].clip_end
+
+    ctxArea.type = oldAreaType
+    return clipStart, clipEnd
 
 
 def export_json(context, self, filepath, binfilepath, use_selection, overwrite_default_scenario,
                 export_animation):
-    version = "1.4"
+    version = "1.5"
     binary = os.path.relpath(binfilepath, os.path.commonpath([filepath, binfilepath]))
     global rootFilePath; rootFilePath = os.path.dirname(filepath)
 
@@ -828,6 +851,9 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
     
     # Cameras
     cameras = [o for o in bpy.data.objects if o.type == 'CAMERA']
+    
+    # We export blender near/far planes
+    clipNear, clipFar = get_blender_viewport_near_far_planes(context)
 
     for i in range(len(cameras)):
         cameraObject = cameras[i]
@@ -854,11 +880,12 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
                 dataDictionary['cameras'][cameraObject.name]['focalLength'] = camera.lens
                 dataDictionary['cameras'][cameraObject.name]['focusDistance'] = camera.dof.focus_distance
                 dataDictionary['cameras'][cameraObject.name]['aperture'] = aperture
-                dataDictionary['cameras'][cameraObject.name]['near'] = 1.0 # 'near' is treated as scaling factor, and we don't want scaling
                 # Getting the chip height is a bit more involved: since we may no longer explicitly set
                 # the sensor size, we have to compute it from the vertical FoV, focal length, and 
                 aspectRatio = scn.render.resolution_y / scn.render.resolution_x
                 dataDictionary['cameras'][cameraObject.name]['chipHeight'] = math.tan(camera.angle / 2.0) * 2.0 * camera.lens * aspectRatio
+            dataDictionary['cameras'][cameraObject.name]['near'] = clipNear
+            dataDictionary['cameras'][cameraObject.name]['far'] = clipFar
         elif camera.type == "ORTHO":
             if cameraObject.name not in dataDictionary['cameras']:
                 dataDictionary['cameras'][cameraObject.name] = collections.OrderedDict()
