@@ -776,9 +776,8 @@ def write_instance_transformation(binary, transformMat):
     invTransformMat.invert()
     # Apply the flip_space transformation on instance transformation level.
     binary.extend(struct.pack('<4f', *invTransformMat[0]))
+    binary.extend(struct.pack('<4f', *invTransformMat[1]))
     binary.extend(struct.pack('<4f', *invTransformMat[2]))
-    for k in range(4):
-        binary.extend(struct.pack('<f', -invTransformMat[1][k]))
 
 def is_animated_instance(instance):
     # Check if there is an animation block or constraints
