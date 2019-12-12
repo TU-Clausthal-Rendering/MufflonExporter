@@ -493,7 +493,7 @@ def write_mix_node(self, material, node, hasAlphaAlready):
         else:
             raise Exception("alpha blending requires one transparent node for the mix shader (node '%s')"%(node.name))
         # TODO: convert alpha channel to x channel!
-        dict["alpha"] = get_image_input(material, node, node.inputs['Fac'].links[0].from_node, 'Fac', True)
+        dict["alpha"] = get_image_input(material, node, node.inputs['Fac'].links[0].from_node, 'Fac', True, self.bake_textures)
     else:
         raise Exception("invalid mix-shader factor input (node '%s')"%(node.name))
         
