@@ -21,7 +21,7 @@ bl_info = {
     "name": "Mufflon Exporter",
     "description": "Exporter for the custom Mufflon file format",
     "author": "Marvin, Johannes Jendersie, Florian Bethe",
-    "version": (1, 1),
+    "version": (1, 6),
     "blender": (2, 80, 0),
     "location": "File > Export > Mufflon (.json/.mff)",
     "category": "Import-Export"
@@ -809,7 +809,7 @@ def get_blender_viewport_near_far_planes(context):
 
 def export_json(context, self, filepath, binfilepath, use_selection, overwrite_default_scenario,
                 export_animation):
-    version = "1.5"
+    version = "1.6"
     binary = os.path.relpath(binfilepath, os.path.commonpath([filepath, binfilepath]))
     global rootFilePath; rootFilePath = os.path.dirname(filepath)
 
@@ -1186,7 +1186,31 @@ def prepare_object_mesh(self, context, lod, triangulate):
     
     return mesh, numberOfTriangles, numberOfQuads
 
-def write_object_binary(self, context, binary, materialLookup, currentObject, currObjectName, keyframe, triangulate, use_compression, use_deflation):
+# Write some data block with (optional) deflation
+# Valid to be called for empty data which will write nothing
+def write_compressed(binary, data, use_deflation):
+    if not data: return
+    outData = data
+    if use_deflation:
+        outData = zlib.compress(data, 8)
+        binary.extend(len(outData).to_bytes(4, byteorder='little')) # compressed size
+        binary.extend(len(data).to_bytes(4, byteorder='little'))    # uncompressed size
+    binary.extend(outData)
+
+def write_string(binary, string):
+    binary.extend(len(string.encode()).to_bytes(4, byteorder='little')) # Length (always wriite)
+    if string:
+        binary.extend(string.encode())
+
+def write_attribute_header(binary, attrName, metaInfo, metaFlags, typeCode, byteSize):
+    binary.extend("Attr".encode())
+    write_string(binary, attrName)
+    write_string(binary, metaInfo)
+    binary.extend(metaFlags.to_bytes(4, byteorder='little'))
+    binary.extend(typeCode.to_bytes(4, byteorder='little'))
+    binary.extend(byteSize.to_bytes(8, byteorder='little'))
+
+def write_object_binary(self, context, binary, materialLookup, boneLookup, currentObject, currObjectName, keyframe, triangulate, use_compression, use_deflation):
     # First write object header information
     binary.extend("Obj_".encode())                                  # Type check
     objectName = currObjectName.encode()                            # Object name
@@ -1309,15 +1333,9 @@ def write_object_binary(self, context, binary, materialLookup, currentObject, cu
             write_vertex_normals(vertexDataArray, mesh, use_compression)
             for k in range(len(vertices)):
                 vertexDataArray.extend(struct.pack('<2f', uvCoordinates[k][0], uvCoordinates[k][1]))
-            vertexOutData = vertexDataArray
-            if use_deflation and len(vertexDataArray) > 0:
-                vertexOutData = zlib.compress(vertexDataArray, 8)
-                binary.extend(len(vertexOutData).to_bytes(4, byteorder='little'))
-                binary.extend(len(vertexDataArray).to_bytes(4, byteorder='little'))
-            binary.extend(vertexOutData)
+            write_compressed(binary, vertexDataArray, use_deflation)
 
             # Vertex Attributes
-            vertexAttributesDataArray = bytearray()  # Used for deflation
             for uvNumber in range(len(mesh.uv_layers)):  # get Number of Vertex Attributes
                 if uvNumber == 0:
                     continue
@@ -1330,56 +1348,69 @@ def write_object_binary(self, context, binary, materialLookup, currentObject, cu
                 if not vertex_color:
                     continue
                 numberOfVertexAttributes += 1
+            if lodObject.parent and lodObject.parent.type == 'ARMATURE':
+                numberOfVertexAttributes += 1
 
             if numberOfVertexAttributes > 0:
+                # Overwrite number (previously a 0 was written)
                 write_num(binary, numberOfVertexAttributesBinaryPosition, 4, numberOfVertexAttributes)
 
-                binary.extend("Attr".encode())
-                for uvNumber in range(len(mesh.uv_layers)):
-                    if uvNumber == 0:
-                        continue
-                    uvCoordinates = numpy.empty(len(vertices), dtype=object)
+                for uvNumber in range(1, len(mesh.uv_layers)):
                     uv_layer = mesh.uv_layers[uvNumber]
                     if not uv_layer:
                         continue
-                    uvName = uv_layer.name
-                    vertexAttributesDataArray.extend(len(uvName.encode()).to_bytes(4, byteorder='little'))
-                    vertexAttributesDataArray.extend(uvName.encode())
-                    vertexAttributesDataArray.extend((0).to_bytes(4, byteorder='little'))  # No meta information
-                    vertexAttributesDataArray.extend((0).to_bytes(4, byteorder='little'))  # No meta information
-                    vertexAttributesDataArray.extend((16).to_bytes(4, byteorder='little'))  # Type: 2*f32 (16)
-                    vertexAttributesDataArray.extend((len(vertices)*4*2).to_bytes(8, byteorder='little'))  # Count of Bytes len(vertices) * 4(f32) * 2(uvCoordinates per vertex)
+                    uvCoordinates = numpy.empty(len(vertices), dtype=object)
+                    vertexAttributeDataArray = bytearray()  # Used for deflation
+                    write_attribute_header(vertexAttributeDataArray, uv_layer.name, "AdditionalUV2D", 0, 16, len(vertices)*4*2)
                     for polygon in mesh.polygons:
                         for loop_index in range(polygon.loop_start, polygon.loop_start + polygon.loop_total):
                             uvCoordinates[mesh.loops[loop_index].vertex_index] = uv_layer.data[loop_index].uv
                     for k in range(len(vertices)):
-                        vertexAttributesDataArray.extend(struct.pack('<2f', uvCoordinates[k][0], uvCoordinates[k][1]))
+                        vertexAttributeDataArray.extend(struct.pack('<2f', uvCoordinates[k][0], uvCoordinates[k][1]))
+                    write_compressed(binary, vertexAttributeDataArray, use_deflation)
+
                 for colorNumber in range(len(mesh.vertex_colors)):
-                    vertexColor = numpy.empty(len(vertices), dtype=object)
                     vertex_color_layer = mesh.vertex_colors[colorNumber]
                     if not vertex_color_layer:
                         continue
-                    colorName = vertex_color_layer.name
-                    vertexAttributesDataArray.extend(len(colorName.encode()).to_bytes(4, byteorder='little'))
-                    vertexAttributesDataArray.extend(colorName.encode())
-                    vertexAttributesDataArray.extend((0).to_bytes(4, byteorder='little'))  # No meta information
-                    vertexAttributesDataArray.extend((0).to_bytes(4, byteorder='little'))  # No meta information
-                    vertexAttributesDataArray.extend((17).to_bytes(4, byteorder='little'))  # Type: 3*f32 (17)
-                    vertexAttributesDataArray.extend((len(vertices)*4*3).to_bytes(8, byteorder='little'))  # Count of Bytes len(vertices) * 4(f32) * 3(color channels per vertex)
+                    vertexColor = numpy.empty(len(vertices), dtype=object)
+                    vertexAttributeDataArray = bytearray()  # Used for deflation
+                    write_attribute_header(vertexAttributeDataArray, vertex_color_layer.name, "Color", 0, 17, len(vertices)*4*3)
                     for polygon in mesh.polygons:
                         for loop_index in range(polygon.loop_start, polygon.loop_start + polygon.loop_total):
                             vertexColor[mesh.loops[loop_index].vertex_index] = vertex_color_layer.data[loop_index].color
                     for k in range(len(vertices)):
-                        vertexAttributesDataArray.extend(struct.pack('<3f', vertexColor[k][0], vertexColor[k][1], vertexColor[k][2]))
+                        vertexAttributeDataArray.extend(struct.pack('<3f', vertexColor[k][0], vertexColor[k][1], vertexColor[k][2]))
+                    write_compressed(binary, vertexAttributeDataArray, use_deflation)
 
-            vertexAttributesOutData = vertexAttributesDataArray
-            if use_deflation and len(vertexAttributesDataArray) > 0:
-                vertexAttributesOutData = zlib.compress(vertexAttributesDataArray, 8)
-                binary.extend(len(vertexAttributesOutData).to_bytes(4, byteorder='little'))
-                binary.extend(len(vertexAttributesDataArray).to_bytes(4, byteorder='little'))
-            binary.extend(vertexAttributesOutData)
+                if lodObject.parent and lodObject.parent.type == 'ARMATURE':
+                    # There is a bone animation, so we need the vertex weights
+                    vertexAttributeDataArray = bytearray()  # Used for deflation
+                    write_attribute_header(vertexAttributeDataArray, "AnimationWeights", "", 0, 19, len(vertices)*4*4)
+                    for vert in mesh.vertices:
+                        weights = [0, 0, 0, 0]  # Intially no weights
+                        idx = [0, 0, 0, 0]      # Reference bone zero
+                        # Collect weights. If there are more than 4, keep only the 4 largest.
+                        for g in vert.groups:
+                            w = g.weight
+                            b = boneLookup[lodObject.parent.name + lodObject.vertex_groups[g.group].name]
+                            # Insetion(sort) with overflow
+                            for i in range(4):
+                                if w > weights[i]:
+                                    w, weights[i] = weights[i], w
+                                    b, idx[i] = idx[i], b
+                        # Encode the weights
+                        for i in range(4):
+                            if idx[i] > 0x003fffff:
+                                self.report({'WARNING'}, ("LOD Object: \"%s\". A vertex reference a bone-index > 0x003fffff." % (lodObject.name)))
+                            if weights[i] < 0 or weights[i] > 1:
+                                self.report({'WARNING'}, ("LOD Object: \"%s\". A vertex weight is outside [0,1]." % (lodObject.name)))
+                            code = (idx[i] & 0x003fffff) | (round(weights[i] * 1023) << 22)
+                            vertexAttributeDataArray.extend(code.to_bytes(4, byteorder='little'))
+                    write_compressed(binary, vertexAttributeDataArray, use_deflation)
 
             # TODO more Vertex Attributes? (with deflation)
+
             # Triangles
             triangleDataArray = bytearray()  # Used for deflation
             for polygon in mesh.polygons:
@@ -1477,6 +1508,52 @@ def write_object_binary(self, context, binary, materialLookup, currentObject, cu
         # reset used state
         lodObject.hide_render = hidden
 
+
+def write_animation_binary(self, context, binary):
+    binary.extend("Bone".encode())
+    animSectionOffsetPos = len(binary)
+    binary.extend((0).to_bytes(8, byteorder='little'))
+    # Get all armature objects
+    armatures = [obj for obj in bpy.data.objects if obj.type == "ARMATURE"]
+    if not armatures:
+        return dict()
+    print("Exporting skeleton animation data...")
+    # Create index -> bone mapping
+    boneLookup = dict()
+    count = 0
+    for arm in armatures:
+        for bone in arm.pose.bones:
+            fullName = arm.name + bone.name
+            boneLookup[fullName] = count
+            count = count + 1
+    binary.extend(count.to_bytes(4, byteorder='little'))
+    nkeys = context.scene.frame_end + 1 - context.scene.frame_start
+    binary.extend(nkeys.to_bytes(4, byteorder='little'))
+
+    # Export all matrices for all keyframes
+    for frame in range(context.scene.frame_start, context.scene.frame_end + 1):
+        context.scene.frame_set(frame)
+        for arm in armatures:
+            for bone in arm.pose.bones:
+                # Compute the full transformation for a bone from rest pose to keyframe in global coordinates
+                restPose = bone.bone.matrix_local
+                framePose = bone.matrix
+                fullTransform = framePose @ restPose.inverted()
+                # Convert into dual quaternion
+                q0 = fullTransform.to_quaternion()
+                qe = mathutils.Quaternion((0.0, fullTransform[0][3] / 2.0, fullTransform[1][3] / 2.0, fullTransform[2][3] / 2.0))
+                qe = qe @ q0
+                binary.extend(struct.pack('<4f', *q0))
+                binary.extend(struct.pack('<4f', *qe))
+                #print(fullTransform)
+                #print(q0)
+                #print(qe)
+
+    write_num(binary, animSectionOffsetPos, 8, len(binary))
+    context.scene.frame_set(0)
+    return boneLookup
+
+
 def export_binary(context, self, filepath, use_selection, use_deflation, use_compression,
                   triangulate, export_animation):
     scn = context.scene
@@ -1522,6 +1599,9 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
     for i in range(len(materialNameLengths)):
         binary.extend(materialNameLengths[i])
         binary.extend(materialNames[i])
+
+    # Write skeletal animation data
+    boneLookup = write_animation_binary(self, context, binary)
 
     # Objects Header
 
@@ -1598,7 +1678,7 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
         idx = len(exportedObjects)
         exportedObjects[currentObject.data] = idx # Store index for the instance export
         write_num(binary, objectStartBinaryPosition[idx], 8, len(binary)) # object start position
-        write_object_binary(self, context, binary, materialLookup, currentObject, currentObject.data.name,
+        write_object_binary(self, context, binary, materialLookup, boneLookup, currentObject, currentObject.data.name,
                             0xFFFFFFFF, triangulate, use_compression, use_deflation)
         
     # Export animated objects (cloth, fluid etc.)
@@ -1612,7 +1692,7 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
             scn.frame_set(f)
             # Implicit object index (no instancing supported)
             write_num(binary, objectStartBinaryPosition[idx], 8, len(binary)) # object start position
-            write_object_binary(self, context, binary, materialLookup, currentObject,
+            write_object_binary(self, context, binary, materialLookup, boneLookup, currentObject,
                                 currentObject.data.name + "__animated__frame_" + str(f),
                                 f, triangulate, use_compression, use_deflation)
             idx += 1
