@@ -1515,8 +1515,13 @@ def write_animation_binary(self, context, binary):
     binary.extend((0).to_bytes(8, byteorder='little'))
     # Get all armature objects
     armatures = [obj for obj in bpy.data.objects if obj.type == "ARMATURE"]
+	# Early-out if there are no armatures
     if not armatures:
+        binary.extend((0).to_bytes(4, byteorder='little'))
+        binary.extend((0).to_bytes(4, byteorder='little'))
+        write_num(binary, animSectionOffsetPos, 8, len(binary))
         return dict()
+	
     print("Exporting skeleton animation data...")
     # Create index -> bone mapping
     boneLookup = dict()
