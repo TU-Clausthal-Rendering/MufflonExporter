@@ -818,17 +818,16 @@ def get_blender_viewport_near_far_planes(context):
     return clipStart, clipEnd
 
 
-def export_json(context, self, filepath, binfilepath, use_selection, overwrite_default_scenario,
-                export_animation):
+def export_json(context, self, binfilepath):
     version = "1.6"
-    binary = os.path.relpath(binfilepath, os.path.commonpath([filepath, binfilepath]))
-    global rootFilePath; rootFilePath = os.path.dirname(filepath)
+    binary = os.path.relpath(binfilepath, os.path.commonpath([self.filepath, binfilepath]))
+    global rootFilePath; rootFilePath = os.path.dirname(self.filepath)
 
     scn = context.scene
     dataDictionary = collections.OrderedDict()
 
-    if os.path.isfile(filepath):
-        file = open(filepath, 'r')
+    if os.path.isfile(self.filepath):
+        file = open(self.filepath, 'r')
         jsonStr = file.read()
         file.close()
         try:
@@ -839,7 +838,7 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
             return -1
         dataDictionary['version'] = version
         dataDictionary['binary'] = binary
-        if overwrite_default_scenario or not ('defaultScenario' in oldData):
+        if self.overwrite_default_scenario or not ('defaultScenario' in oldData):
             dataDictionary['defaultScenario'] = context.scene.name
         else:
             dataDictionary['defaultScenario'] = oldData['defaultScenario']
@@ -858,7 +857,7 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
 
     # Store current frame to reset it later
     frame_current = scn.frame_current
-    frame_range = range(scn.frame_start, scn.frame_end + 1) if export_animation else [frame_current]
+    frame_range = range(scn.frame_start, scn.frame_end + 1) if self.export_animation else [frame_current]
     
     # Cameras
     cameras = [o for o in bpy.data.objects if o.type == 'CAMERA']
@@ -1023,7 +1022,7 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
         # TODO: Envmaps how in 2.8?
     
     # Make a dict with all instances, cameras, ...
-    if use_selection:
+    if self.use_selection:
         objects = [obj for obj in bpy.context.selected_objects if obj.users > 0]
     else:
         objects = [obj for obj in bpy.data.objects if obj.users > 0]
@@ -1144,7 +1143,7 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
     # CustomJSONEncoder: Custom float formater (default values will be like 0.2799999994039535)
     # and which packs small arrays in one line
     dump = json.dumps(dataDictionary, indent=4, cls=CustomJSONEncoder)
-    file = open(filepath, 'w')
+    file = open(self.filepath, 'w')
     file.write(dump)
     file.close()
     return 0
@@ -1157,14 +1156,16 @@ def export_json(context, self, filepath, binfilepath, use_selection, overwrite_d
 #   #  #  #  #  ##  #######  #  #    #
 #   ###   #  #   #  #     #  #  #    #
 
-def prepare_object_mesh(self, context, lod, triangulate):
-    appliedObject = lod.evaluated_get(context.evaluated_depsgraph_get()) # applies all modifiers
+def prepare_object_mesh(self, context, lod):
+    depsgraph = context.evaluated_depsgraph_get()
+    # Disabling the armature modifier so we get rest-pose vertex positions is done in export_binary
+    appliedObject = lod.evaluated_get(depsgraph) # applies all modifiers
     mesh = appliedObject.to_mesh()
     bm = bmesh.new()
     bm.from_mesh(mesh)  # bmesh gives a local editable mesh copy
     facesToTriangulate = []
     for face in bm.faces:
-        if len(face.edges) > 4 or (triangulate and len(face.edges) > 3):
+        if len(face.edges) > 4 or (self.triangulate and len(face.edges) > 3):
             facesToTriangulate.append(face)
     if len(facesToTriangulate) > 0:
         bmesh.ops.triangulate(bm, faces=facesToTriangulate, quad_method='BEAUTY', ngon_method='BEAUTY')
@@ -1221,7 +1222,7 @@ def write_attribute_header(binary, attrName, metaInfo, metaFlags, typeCode, byte
     binary.extend(typeCode.to_bytes(4, byteorder='little'))
     binary.extend(byteSize.to_bytes(8, byteorder='little'))
 
-def write_object_binary(self, context, binary, materialLookup, boneLookup, currentObject, currObjectName, keyframe, triangulate, use_compression, use_deflation):
+def write_object_binary(self, context, binary, materialLookup, boneLookup, currentObject, currObjectName, keyframe):
     # First write object header information
     binary.extend("Obj_".encode())                                  # Type check
     objectName = currObjectName.encode()                            # Object name
@@ -1287,7 +1288,7 @@ def write_object_binary(self, context, binary, materialLookup, boneLookup, curre
         lodObject.hide_render = False
         context.view_layer.objects.active = lodObject
         if not lodObject.mufflon_sphere:
-            mesh, numberOfTriangles, numberOfQuads = prepare_object_mesh(self, context, lodObject, triangulate)
+            mesh, numberOfTriangles, numberOfQuads = prepare_object_mesh(self, context, lodObject)
             numberOfSpheres = 0
             numberOfVertices = len(mesh.vertices)
             numberOfEdges = len(mesh.edges)
@@ -1341,10 +1342,10 @@ def write_object_binary(self, context, binary, materialLookup, boneLookup, curre
             vertexDataArray = bytearray()  # Used for deflation
             for k in range(len(vertices)):
                 vertexDataArray.extend(struct.pack('<3f', *mesh.vertices[k].co))
-            write_vertex_normals(vertexDataArray, mesh, use_compression)
+            write_vertex_normals(vertexDataArray, mesh, self.use_compression)
             for k in range(len(vertices)):
                 vertexDataArray.extend(struct.pack('<2f', uvCoordinates[k][0], uvCoordinates[k][1]))
-            write_compressed(binary, vertexDataArray, use_deflation)
+            write_compressed(binary, vertexDataArray, self.use_deflation)
 
             # Vertex Attributes
             for uvNumber in range(len(mesh.uv_layers)):  # get Number of Vertex Attributes
@@ -1359,7 +1360,7 @@ def write_object_binary(self, context, binary, materialLookup, boneLookup, curre
                 if not vertex_color:
                     continue
                 numberOfVertexAttributes += 1
-            if lodObject.parent and lodObject.parent.type == 'ARMATURE':
+            if self.export_animation and lodObject.parent and lodObject.parent.type == 'ARMATURE':
                 numberOfVertexAttributes += 1
 
             if numberOfVertexAttributes > 0:
@@ -1378,7 +1379,7 @@ def write_object_binary(self, context, binary, materialLookup, boneLookup, curre
                             uvCoordinates[mesh.loops[loop_index].vertex_index] = uv_layer.data[loop_index].uv
                     for k in range(len(vertices)):
                         vertexAttributeDataArray.extend(struct.pack('<2f', uvCoordinates[k][0], uvCoordinates[k][1]))
-                    write_compressed(binary, vertexAttributeDataArray, use_deflation)
+                    write_compressed(binary, vertexAttributeDataArray, self.use_deflation)
 
                 for colorNumber in range(len(mesh.vertex_colors)):
                     vertex_color_layer = mesh.vertex_colors[colorNumber]
@@ -1392,9 +1393,9 @@ def write_object_binary(self, context, binary, materialLookup, boneLookup, curre
                             vertexColor[mesh.loops[loop_index].vertex_index] = vertex_color_layer.data[loop_index].color
                     for k in range(len(vertices)):
                         vertexAttributeDataArray.extend(struct.pack('<3f', vertexColor[k][0], vertexColor[k][1], vertexColor[k][2]))
-                    write_compressed(binary, vertexAttributeDataArray, use_deflation)
+                    write_compressed(binary, vertexAttributeDataArray, self.use_deflation)
 
-                if lodObject.parent and lodObject.parent.type == 'ARMATURE':
+                if self.export_animation and lodObject.parent and lodObject.parent.type == 'ARMATURE':
                     # There is a bone animation, so we need the vertex weights
                     vertexAttributeDataArray = bytearray()  # Used for deflation
                     write_attribute_header(vertexAttributeDataArray, "AnimationWeights", "", 0, 19, len(vertices)*4*4)
@@ -1418,7 +1419,7 @@ def write_object_binary(self, context, binary, materialLookup, boneLookup, curre
                                 self.report({'WARNING'}, ("LOD Object: \"%s\". A vertex weight is outside [0,1]." % (lodObject.name)))
                             code = (idx[i] & 0x003fffff) | (round(weights[i] * 1023) << 22)
                             vertexAttributeDataArray.extend(code.to_bytes(4, byteorder='little'))
-                    write_compressed(binary, vertexAttributeDataArray, use_deflation)
+                    write_compressed(binary, vertexAttributeDataArray, self.use_deflation)
 
             # TODO more Vertex Attributes? (with deflation)
 
@@ -1429,7 +1430,7 @@ def write_object_binary(self, context, binary, materialLookup, boneLookup, curre
                     for k in range(3):
                         triangleDataArray.extend(polygon.vertices[k].to_bytes(4, byteorder='little'))
             triangleOutData = triangleDataArray
-            if use_deflation and len(triangleDataArray) > 0:
+            if self.use_deflation and len(triangleDataArray) > 0:
                 triangleOutData = zlib.compress(triangleDataArray, 8)
                 binary.extend(len(triangleOutData).to_bytes(4, byteorder='little'))
                 binary.extend(len(triangleDataArray).to_bytes(4, byteorder='little'))
@@ -1441,7 +1442,7 @@ def write_object_binary(self, context, binary, materialLookup, boneLookup, curre
                     for k in range(4):
                         quadDataArray.extend(polygon.vertices[k].to_bytes(4, byteorder='little'))
             quadOutData = quadDataArray
-            if use_deflation and len(quadDataArray) > 0:
+            if self.use_deflation and len(quadDataArray) > 0:
                 quadOutData = zlib.compress(quadDataArray, 8)
                 binary.extend(len(quadOutData).to_bytes(4, byteorder='little'))
                 binary.extend(len(quadDataArray).to_bytes(4, byteorder='little'))
@@ -1481,7 +1482,7 @@ def write_object_binary(self, context, binary, materialLookup, boneLookup, curre
                     for k in range(4):
                         binary[objectFlagsBinaryPosition + k] = objectFlagsBin[k]
             matIDOutData = matIDDataArray
-            if use_deflation and len(matIDDataArray) > 0:
+            if self.use_deflation and len(matIDDataArray) > 0:
                 matIDOutData = zlib.compress(matIDDataArray, 8)
                 binary.extend(len(matIDOutData).to_bytes(4, byteorder='little'))
                 binary.extend(len(matIDDataArray).to_bytes(4, byteorder='little'))
@@ -1511,7 +1512,7 @@ def write_object_binary(self, context, binary, materialLookup, boneLookup, curre
 
             sphereOutData = sphereDataArray
             # TODO Sphere Attributes
-            if use_deflation and len(sphereDataArray) > 0:
+            if self.use_deflation and len(sphereDataArray) > 0:
                 sphereOutData = zlib.compress(sphereDataArray, 8)
                 binary.extend(len(sphereOutData).to_bytes(4, byteorder='little'))
                 binary.extend(len(sphereDataArray).to_bytes(4, byteorder='little'))
@@ -1527,7 +1528,7 @@ def write_animation_binary(self, context, binary):
     # Get all armature objects
     armatures = [obj for obj in bpy.data.objects if obj.type == "ARMATURE"]
     # Early-out if there are no armatures
-    if not armatures:
+    if not armatures or not self.export_animation:
         binary.extend((0).to_bytes(4, byteorder='little'))
         binary.extend((0).to_bytes(4, byteorder='little'))
         write_num(binary, animSectionOffsetPos, 8, len(binary))
@@ -1567,12 +1568,11 @@ def write_animation_binary(self, context, binary):
     return boneLookup
 
 
-def export_binary(context, self, filepath, use_selection, use_deflation, use_compression,
-                  triangulate, export_animation):
+def export_binary(context, self, filepath):
     scn = context.scene
     # Store current frame to reset it later
     frame_current = scn.frame_current
-    frame_range = range(scn.frame_start, scn.frame_end + 1) if export_animation else [frame_current]
+    frame_range = range(scn.frame_start, scn.frame_end + 1) if self.export_animation else [frame_current]
     
     # Binary
     binary = bytearray()
@@ -1625,15 +1625,15 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
     binary.extend((0).to_bytes(8, byteorder='little'))  # has to be corrected when the value is known
     # Global object flags (compression etc.)
     flags = 0x0
-    if use_deflation:
+    if self.use_deflation:
         flags |= 1
-    if use_compression:
+    if self.use_compression:
         flags |= 2
     binary.extend(flags.to_bytes(4, byteorder='little'))
 
     # Get all real geometric objects for export and make them unique (instancing may refer to the same
     # mesh multiple times).
-    if use_selection:
+    if self.use_selection:
         instances = [obj for obj in bpy.context.selected_objects if is_instance(obj)]
     else:
         instances = [obj for obj in bpy.data.objects if is_instance(obj)]
@@ -1647,7 +1647,7 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
     instances = list(set(instances) - set(boneCustomShapes))
     
     animationObjects = []
-    if export_animation:
+    if self.export_animation:
         print("Checking for animated meshes...")
         # List of instances to remove because they're animated
         remainingInstances = []
@@ -1669,8 +1669,7 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
                     remainingInstances.append(instance)
                 
         instances = remainingInstances
-                    
-
+    
     # Get the number of unique data references. While it hurts to perform an entire set construction
     # there is no much better way. The object count must be known to construct the jump-table properly.
     countOfObjects = len({obj.data for obj in instances}) + len(animationObjects) * len(frame_range)
@@ -1688,7 +1687,18 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
     if context.object:
         mode = context.object.mode   # Keep this for resetting later
         bpy.ops.object.mode_set(mode='OBJECT')
-        
+    
+    # If we're exporting a rigged mesh, we have to temporarily disable rigging since
+    # we expects the vertices in rest position
+    armMods = []
+    if self.export_animation:
+        for obj in instances:
+            for mod in obj.modifiers:
+                if mod.type == 'ARMATURE' and mod.show_viewport:
+                    armMods.append(mod)
+                    mod.show_viewport = False
+        context.evaluated_depsgraph_get().update()
+    
     # Export regular objects
     print("Exporting non-animated objects...")
     for currentObject in instances:
@@ -1700,7 +1710,7 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
         exportedObjects[currentObject.data] = idx # Store index for the instance export
         write_num(binary, objectStartBinaryPosition[idx], 8, len(binary)) # object start position
         write_object_binary(self, context, binary, materialLookup, boneLookup, currentObject, currentObject.data.name,
-                            0xFFFFFFFF, triangulate, use_compression, use_deflation)
+                            0xFFFFFFFF)
         
     # Export animated objects (cloth, fluid etc.)
     # TODO: shape key support?
@@ -1714,9 +1724,14 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
             # Implicit object index (no instancing supported)
             write_num(binary, objectStartBinaryPosition[idx], 8, len(binary)) # object start position
             write_object_binary(self, context, binary, materialLookup, boneLookup, currentObject,
-                                currentObject.data.name + "__animated__frame_" + str(f),
-                                f, triangulate, use_compression, use_deflation)
+                                currentObject.data.name + "__animated__frame_" + str(f), f)
             idx += 1
+    
+    # Reset the armature modifier visibilities
+    if self.export_animation:
+        for mod in armMods:
+            mod.show_viewport = True
+        context.evaluated_depsgraph_get().update()
     
     #reset active object
     context.view_layer.objects.active = activeObject
@@ -1794,17 +1809,12 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
     return 0
 
 
-def export_mufflon(context, self, filepath, use_selection, use_compression,
-                   use_deflation, overwrite_default_scenario, triangulate,
-                   export_animation):
-    filename = os.path.splitext(filepath)[0]
+def export_mufflon(context, self):
+    filename = os.path.splitext(self.filepath)[0]
     binfilepath = filename + ".mff"
-    if export_json(context, self, filepath, binfilepath, use_selection,
-                   overwrite_default_scenario, export_animation) == 0:
+    if export_json(context, self, binfilepath) == 0:
         print("Succeeded exporting JSON")
-        if export_binary(context, self, binfilepath, use_selection,
-                         use_compression, use_deflation, triangulate,
-                         export_animation) == 0:
+        if export_binary(context, self, binfilepath) == 0:
             print("Succeeded exporting binary")
         else:
             print("Failed exporting binary")
@@ -1890,10 +1900,7 @@ class MufflonExporter(Operator, ExportHelper):
     path_mode = path_reference_mode
 
     def execute(self, context):
-        return export_mufflon(context, self, self.filepath, self.use_selection,
-                              self.use_deflation, self.use_compression,
-                              self.overwrite_default_scenario, self.triangulate,
-                              self.export_animation)
+        return export_mufflon(context, self)
 
 
 # Only needed if you want to add into a dynamic menu
