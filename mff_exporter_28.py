@@ -719,6 +719,9 @@ def is_instance(obj):
     # Camera, Lamp, ... are skipped by this if, too.
     if obj.type != "MESH" and not obj.mufflon_sphere:
         return False
+    # Skip meshes which do not have any faces
+    if obj.type == "MESH" and len(obj.data.polygons) == 0:
+        return False
     # An object can be 'usual', 'lod_instance' xor 'lod_mesh' where the latter is not an instance.
     if is_lod_mesh(obj):
         return False
@@ -781,7 +784,15 @@ def write_instance_transformation(binary, transformMat):
 
 def is_animated_instance(instance):
     # Check if there is an animation block or constraints
-    return (instance.animation_data is not None) or ((instance.constraints is not None) and (len(instance.constraints) > 0))
+    if (instance.constraints is not None) and (len(instance.constraints) > 0):
+        return True
+    if instance.animation_data is not None:
+        # We also have to check uf if the instance is rigged, in which case we don't export keyframed instances
+        for mod in instance.modifiers:
+            if mod.type == 'ARMATURE':
+                return False
+        return True
+    return False
     
 def get_blender_viewport_near_far_planes(context):
     # Try to find a suitable area
@@ -1389,12 +1400,12 @@ def write_object_binary(self, context, binary, materialLookup, boneLookup, curre
                     write_attribute_header(vertexAttributeDataArray, "AnimationWeights", "", 0, 19, len(vertices)*4*4)
                     for vert in mesh.vertices:
                         weights = [0, 0, 0, 0]  # Intially no weights
-                        idx = [0, 0, 0, 0]      # Reference bone zero
+                        idx = [0x003fffff, 0x003fffff, 0x003fffff, 0x003fffff]
                         # Collect weights. If there are more than 4, keep only the 4 largest.
                         for g in vert.groups:
                             w = g.weight
                             b = boneLookup[lodObject.parent.name + lodObject.vertex_groups[g.group].name]
-                            # Insetion(sort) with overflow
+                            # Insertion(sort) with overflow
                             for i in range(4):
                                 if w > weights[i]:
                                     w, weights[i] = weights[i], w
@@ -1402,7 +1413,7 @@ def write_object_binary(self, context, binary, materialLookup, boneLookup, curre
                         # Encode the weights
                         for i in range(4):
                             if idx[i] > 0x003fffff:
-                                self.report({'WARNING'}, ("LOD Object: \"%s\". A vertex reference a bone-index > 0x003fffff." % (lodObject.name)))
+                                self.report({'WARNING'}, ("LOD Object: \"%s\". A vertex references a bone index > 0x003fffff." % (lodObject.name)))
                             if weights[i] < 0 or weights[i] > 1:
                                 self.report({'WARNING'}, ("LOD Object: \"%s\". A vertex weight is outside [0,1]." % (lodObject.name)))
                             code = (idx[i] & 0x003fffff) | (round(weights[i] * 1023) << 22)
@@ -1515,13 +1526,13 @@ def write_animation_binary(self, context, binary):
     binary.extend((0).to_bytes(8, byteorder='little'))
     # Get all armature objects
     armatures = [obj for obj in bpy.data.objects if obj.type == "ARMATURE"]
-	# Early-out if there are no armatures
+    # Early-out if there are no armatures
     if not armatures:
         binary.extend((0).to_bytes(4, byteorder='little'))
         binary.extend((0).to_bytes(4, byteorder='little'))
         write_num(binary, animSectionOffsetPos, 8, len(binary))
         return dict()
-	
+    
     print("Exporting skeleton animation data...")
     # Create index -> bone mapping
     boneLookup = dict()
@@ -1540,19 +1551,16 @@ def write_animation_binary(self, context, binary):
         context.scene.frame_set(frame)
         for arm in armatures:
             for bone in arm.pose.bones:
-                # Compute the full transformation for a bone from rest pose to keyframe in global coordinates
-                restPose = bone.bone.matrix_local
-                framePose = bone.matrix
-                fullTransform = framePose @ restPose.inverted()
+                transMat = bone.matrix @ bone.bone.matrix_local.inverted()
                 # Convert into dual quaternion
-                q0 = fullTransform.to_quaternion()
-                qe = mathutils.Quaternion((0.0, fullTransform[0][3] / 2.0, fullTransform[1][3] / 2.0, fullTransform[2][3] / 2.0))
+                translation, q0, scale = transMat.decompose()
+                qe = mathutils.Quaternion((0.0, translation.x / 2.0, translation.y / 2.0, translation.z / 2.0))
                 qe = qe @ q0
+                # Swap the quaternion element order, since we expect i, j, k, r instead of w, x, y, z
+                q0 = mathutils.Quaternion((q0.x, q0.y, q0.z, q0.w))
+                qe = mathutils.Quaternion((qe.x, qe.y, qe.z, qe.w))
                 binary.extend(struct.pack('<4f', *q0))
                 binary.extend(struct.pack('<4f', *qe))
-                #print(fullTransform)
-                #print(q0)
-                #print(qe)
 
     write_num(binary, animSectionOffsetPos, 8, len(binary))
     context.scene.frame_set(0)
@@ -1629,6 +1637,14 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
         instances = [obj for obj in bpy.context.selected_objects if is_instance(obj)]
     else:
         instances = [obj for obj in bpy.data.objects if is_instance(obj)]
+    
+    # If we have armatures its bones may have custom object representations which should not be exported
+    boneCustomShapes = []
+    for armature in [ob for ob in bpy.data.objects if ob.type == 'ARMATURE']:
+        for bone in armature.pose.bones:
+            if bone.custom_shape is not None:
+                boneCustomShapes.append(bone.custom_shape)
+    instances = list(set(instances) - set(boneCustomShapes))
     
     animationObjects = []
     if export_animation:
@@ -1769,6 +1785,7 @@ def export_binary(context, self, filepath, use_selection, use_deflation, use_com
         binary[numberOfInstancesBinaryPosition + i] = numberOfInstancesBytes[i]
 
     # Reset scene
+    scn.frame_set(frame_current)
     context.window.scene = scn
     # Write binary to file
     binFile = open(filepath, 'bw')
