@@ -1069,9 +1069,26 @@ def export_json(context, self, binfilepath):
                 workDictionary = write_glass_node(self, material, firstNode)
             else:
                 workDictionary = write_nonrecursive_node(self, material, firstNode)
-            # TODO: displacement
             if len(outputNode.inputs['Displacement'].links):
-                self.report({'WARNING'}, ("Material '%s': displacement output is not supported yet"%(material.name)))
+                displaceNode = outputNode.inputs['Displacement'].links[0].from_node
+                if displaceNode.bl_idname == 'ShaderNodeDisplacement':
+                    if len(displaceNode.inputs['Height'].links) > 0:
+                        heightNode = displaceNode.inputs['Height'].links[0].from_node
+                        if heightNode.bl_idname != 'ShaderNodeTexImage':
+                            self.report({'Warning'}, ("Material '%s': displacement height input must be an image texture"%(material.name)))
+                        elif len(displaceNode.inputs['Midlevel'].links) > 0:
+                            self.report({'Warning'}, ("Material '%s': displacement midlevel input must be scalar"%(material.name)))
+                        elif len(displaceNode.inputs['Scale'].links) > 0:
+                            self.report({'Warning'}, ("Material '%s': displacement scale input must be scalar"%(material.name)))
+                        else:
+                            workDictionary['displacement'] = collections.OrderedDict()
+                            workDictionary['displacement']['map'] = get_image_input(material, displaceNode, heightNode, "Height", True, self.bake_textures)
+                            workDictionary['displacement']['bias'] = displaceNode.inputs['Midlevel'].default_value
+                            workDictionary['displacement']['scale'] = displaceNode.inputs['Scale'].default_value
+                    else:
+                        self.report({'Warning'}, ("Material '%s': displacement height needs an image texture input"%(material.name)))   
+                else:
+                    self.report({'WARNING'}, ("Material '%s': displacement output is not recognized (must be Displacement node first)"%(material.name)))
             if len(outputNode.inputs['Volume'].links):
                 self.report({'WARNING'}, ("Material '%s': volume output is not supported yet"%(material.name)))
             write_outer_medium(self, workDictionary, material)
@@ -1605,7 +1622,6 @@ def get_bone_custom_shapes():
 def write_instances(self, binary, instances, exportedObjects):
     # Type
     binary.extend("Inst".encode())
-    print(instances)
     # Number of Instances
     numberOfInstancesBinaryPosition = len(binary)
     binary.extend((0).to_bytes(4, byteorder='little'))  # has to be corrected later
